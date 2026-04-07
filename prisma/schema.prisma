@@ -1,0 +1,1108 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model activity_logs {
+  id                     Int       @id @default(autoincrement())
+  user_id                Int?
+  action                 String    @db.VarChar(100)
+  entity_type            String    @db.VarChar(50)
+  entity_id              Int?
+  details                Json?
+  ip_address             String?   @db.VarChar(45)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  users                  users?    @relation(fields: [user_id], references: [id], onUpdate: NoAction, map: "fk_activity_logs_user")
+}
+
+model alerts {
+  id                           Int           @id @default(autoincrement())
+  type                         String        @db.VarChar(50)
+  title                        String        @db.VarChar(255)
+  message                      String
+  field_id                     Int?
+  customer_id                  Int?
+  reservation_id               Int?
+  user_id                      Int?
+  status                       String?       @default("unread") @db.VarChar(20)
+  priority                     String?       @default("medium") @db.VarChar(10)
+  admin_id                     Int
+  reservation_data             Json?
+  user_id_registration         Int?
+  date_time_registration       DateTime?     @default(now()) @db.Timestamptz(6)
+  user_id_modification         Int?
+  date_time_modification       DateTime?     @db.Timestamptz(6)
+  users_alerts_admin_idTousers users         @relation("alerts_admin_idTousers", fields: [admin_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_alerts_admin")
+  customers                    customers?    @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_alerts_customer")
+  fields                       fields?       @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_alerts_field")
+  reservations                 reservations? @relation(fields: [reservation_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_alerts_reservation")
+  users_alerts_user_idTousers  users?        @relation("alerts_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_alerts_user")
+
+  @@index([admin_id], map: "idx_alerts_admin_id")
+  @@index([date_time_registration], map: "idx_alerts_created_at")
+  @@index([status], map: "idx_alerts_status")
+  @@index([type], map: "idx_alerts_type")
+}
+
+model badge_tiers {
+  id                     Int       @id @default(autoincrement())
+  badge_id               Int
+  tier                   String    @db.VarChar(20)
+  icon                   String?   @db.VarChar(255)
+  label                  String?   @db.VarChar(100)
+  required_value         Int
+  reward_hours           Decimal?  @default(0.00) @db.Decimal(10, 2)
+  color                  String?   @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  badges                 badges    @relation(fields: [badge_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_badge_tiers_badge")
+
+  @@unique([badge_id, tier], map: "uk_badge_tiers")
+}
+
+model badges {
+  id                     Int               @id @default(autoincrement())
+  name                   String            @unique @db.VarChar(255)
+  icon                   String?           @db.VarChar(255)
+  description            String?
+  criteria_type          String            @db.VarChar(50)
+  is_active              Boolean?          @default(true)
+  status                 String?           @default("active") @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime?         @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?         @db.Timestamptz(6)
+  criteria_id            Int?
+  badge_tiers            badge_tiers[]
+  badge_criteria         badge_criteria?   @relation(fields: [criteria_id], references: [id], onUpdate: NoAction, map: "fk_badges_criteria")
+  customer_badges        customer_badges[]
+
+  @@index([criteria_id], map: "idx_badges_criteria_id")
+}
+
+model blacklist {
+  id                     Int       @id @default(autoincrement())
+  phone_number           String    @unique @db.VarChar(20)
+  customer_name          String    @db.VarChar(255)
+  reason                 String
+  blocked_by             Int
+  blocked_at             DateTime? @default(now()) @db.Timestamptz(6)
+  blocked_until          DateTime? @db.Timestamptz(6)
+  reservations_missed    Int?      @default(0)
+  status                 String?   @default("active") @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  users                  users     @relation(fields: [blocked_by], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_blacklist_blocked_by")
+
+  @@index([blocked_by], map: "idx_blacklist_blocked_by")
+  @@index([phone_number], map: "idx_blacklist_phone_number")
+}
+
+model booking_alert_rules {
+  id                     Int       @id @default(autoincrement())
+  name                   String    @db.VarChar(255)
+  sport_types            Json?
+  time_ranges            Json?
+  days                   Json?
+  enabled                Boolean?  @default(true)
+  notify_in_app          Boolean?  @default(true)
+  notify_whatsapp        Boolean?  @default(false)
+  notify_email           Boolean?  @default(false)
+  created_by             Int
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  users                  users     @relation(fields: [created_by], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_booking_alert_rules_created_by")
+}
+
+model coupon_fields {
+  id                     Int       @id @default(autoincrement())
+  coupon_id              Int
+  field_id               Int
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  coupons                coupons   @relation(fields: [coupon_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_coupon_fields_coupon")
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_coupon_fields_field")
+
+  @@unique([coupon_id, field_id], map: "uk_coupon_fields")
+}
+
+model coupon_usage {
+  id                     Int          @id @default(autoincrement())
+  coupon_id              Int
+  user_id                Int?
+  customer_id            Int?
+  reservation_id         Int
+  used_at                DateTime?    @default(now()) @db.Timestamptz(6)
+  user_id_registration   Int?
+  date_time_registration DateTime?    @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?    @db.Timestamptz(6)
+  coupons                coupons      @relation(fields: [coupon_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_coupon_usage_coupon")
+  customers              customers?   @relation(fields: [customer_id], references: [id], onUpdate: NoAction, map: "fk_coupon_usage_customer")
+  reservations           reservations @relation(fields: [reservation_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_coupon_usage_reservation")
+  users                  users?       @relation(fields: [user_id], references: [id], onUpdate: NoAction, map: "fk_coupon_usage_user")
+}
+
+model coupons {
+  id                     Int             @id @default(autoincrement())
+  code                   String          @unique @db.VarChar(50)
+  name                   String          @db.VarChar(255)
+  description            String?
+  type                   String          @db.VarChar(20)
+  value                  Decimal         @db.Decimal(10, 2)
+  is_active              Boolean?        @default(true)
+  usage_limit            Int?
+  used_count             Int?            @default(0)
+  valid_from             DateTime        @db.Date
+  valid_until            DateTime        @db.Date
+  min_purchase           Decimal?        @default(0.00) @db.Decimal(10, 2)
+  applicable_fields      Json?
+  created_by             Int
+  status                 String?         @default("active") @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime?       @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?       @db.Timestamptz(6)
+  coupon_fields          coupon_fields[]
+  coupon_usage           coupon_usage[]
+  users                  users           @relation(fields: [created_by], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_coupons_created_by")
+  reservations           reservations[]
+
+  @@index([code], map: "idx_coupons_code")
+  @@index([is_active], map: "idx_coupons_is_active")
+  @@index([valid_from], map: "idx_coupons_valid_from")
+  @@index([valid_until], map: "idx_coupons_valid_until")
+}
+
+model customer_badges {
+  id                     Int       @id @default(autoincrement())
+  customer_id            Int
+  badge_id               Int
+  tier                   String    @db.VarChar(20)
+  unlocked_at            DateTime? @default(now()) @db.Timestamptz(6)
+  auto_assigned          Boolean?  @default(false)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  badges                 badges    @relation(fields: [badge_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_customer_badges_badge")
+  customers              customers @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_customer_badges_customer")
+
+  @@unique([customer_id, badge_id, tier], map: "uk_customer_badges")
+}
+
+model customer_promotion_history {
+  id                     Int       @id @default(autoincrement())
+  customer_id            Int
+  type                   String    @db.VarChar(20)
+  hours_redeemed         Decimal?  @default(0.00) @db.Decimal(10, 2)
+  hours_earned           Decimal?  @default(0.00) @db.Decimal(10, 2)
+  remaining_hours        Decimal?  @default(0.00) @db.Decimal(10, 2)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  customers              customers @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_customer_promotion_history_customer")
+}
+
+model customers {
+  id                                Int                              @id @default(autoincrement())
+  user_id                           Int?
+  phone_number                      String                           @unique @db.VarChar(20)
+  name                              String                           @db.VarChar(255)
+  email                             String?                          @db.VarChar(255)
+  created_by                        Int
+  total_reservations                Int?                             @default(0)
+  total_hours                       Decimal?                         @default(0.00) @db.Decimal(10, 2)
+  total_spent                       Decimal?                         @default(0.00) @db.Decimal(10, 2)
+  earned_free_hours                 Decimal?                         @default(0.00) @db.Decimal(10, 2)
+  used_free_hours                   Decimal?                         @default(0.00) @db.Decimal(10, 2)
+  available_free_hours              Decimal?                         @default(0.00) @db.Decimal(10, 2)
+  last_reservation                  DateTime?                        @db.Timestamptz(6)
+  is_vip                            Boolean?                         @default(false)
+  notes                             String?
+  status                            String?                          @default("active") @db.VarChar(20)
+  user_id_registration              Int?
+  date_time_registration            DateTime?                        @default(now()) @db.Timestamptz(6)
+  user_id_modification              Int?
+  date_time_modification            DateTime?                        @db.Timestamptz(6)
+  accumulated_hours                 Decimal?                         @default(0.00) @db.Decimal(10, 2)
+  alerts                            alerts[]
+  coupon_usage                      coupon_usage[]
+  customer_badges                   customer_badges[]
+  customer_promotion_history        customer_promotion_history[]
+  customer_promotion_redemptions    customer_promotion_redemptions[]
+  users_customers_created_byTousers users                            @relation("customers_created_byTousers", fields: [created_by], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_customers_created_by")
+  users_customers_user_idTousers    users?                           @relation("customers_user_idTousers", fields: [user_id], references: [id], onUpdate: NoAction, map: "fk_customers_user")
+  refunds                           refunds[]
+  reservations                      reservations[]
+  reviews                           reviews[]
+
+  @@index([created_by], map: "idx_customers_created_by")
+  @@index([is_vip], map: "idx_customers_is_vip")
+  @@index([phone_number], map: "idx_customers_phone_number")
+}
+
+model departments {
+  id                     Int         @id @default(autoincrement())
+  code                   String      @unique @db.VarChar(2)
+  name                   String      @db.VarChar(100)
+  user_id_registration   Int?
+  date_time_registration DateTime?   @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?   @db.Timestamptz(6)
+  districts              districts[]
+  provinces              provinces[]
+}
+
+model districts {
+  id                     Int         @id @default(autoincrement())
+  code                   String      @unique @db.VarChar(6)
+  name                   String      @db.VarChar(100)
+  province_id            Int
+  department_id          Int
+  user_id_registration   Int?
+  date_time_registration DateTime?   @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?   @db.Timestamptz(6)
+  departments            departments @relation(fields: [department_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_districts_department")
+  provinces              provinces   @relation(fields: [province_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_districts_province")
+  fields                 fields[]
+
+  @@index([code], map: "idx_districts_code")
+  @@index([province_id], map: "idx_districts_province_id")
+}
+
+model field_amenities {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int
+  amenity                String    @db.VarChar(255)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_amenities_field")
+}
+
+model field_cancellation_policies {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int       @unique
+  allow_cancellation     Boolean?  @default(true)
+  hours_before_event     Int?      @default(24)
+  refund_percentage      Decimal?  @default(100.00) @db.Decimal(5, 2)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_cancellation_policies_field")
+}
+
+model field_dimensions {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int       @unique
+  length                 String?   @db.VarChar(50)
+  width                  String?   @db.VarChar(50)
+  area                   String?   @db.VarChar(50)
+  goal_size              String?   @db.VarChar(50)
+  court_type             String?   @db.VarChar(50)
+  surface_type           String?   @db.VarChar(30)
+  basket_height          String?   @db.VarChar(20)
+  net_height             String?   @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_dimensions_field")
+}
+
+model field_equipment {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int       @unique
+  has_jersey_rental      Boolean?  @default(false)
+  jersey_price           Decimal?  @db.Decimal(10, 2)
+  has_ball_rental        Boolean?  @default(false)
+  ball_rental_price      Decimal?  @db.Decimal(10, 2)
+  has_scoreboard         Boolean?  @default(false)
+  has_nets               Boolean?  @default(true)
+  has_goals              Boolean?  @default(true)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  has_cone_rental        Boolean?  @default(false)
+  cone_price             Decimal?  @db.Decimal(10, 2)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_equipment_field")
+}
+
+model field_images {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int
+  image_url              String
+  category               String?   @db.VarChar(50)
+  is_primary             Boolean?  @default(false)
+  order_index            Int?      @default(0)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_images_field")
+}
+
+model field_maintenance_schedules {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int
+  start_date             DateTime  @db.Date
+  end_date               DateTime  @db.Date
+  start_time             DateTime? @db.Time(6)
+  end_time               DateTime? @db.Time(6)
+  reason                 String?
+  is_recurring           Boolean?  @default(false)
+  recurrence_pattern     String?   @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_maintenance_field")
+}
+
+model field_rules {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int
+  rule                   String
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_rules_field")
+}
+
+model field_schedules {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int
+  day_of_week            String    @db.VarChar(10)
+  is_open                Boolean?  @default(true)
+  open_time              DateTime? @db.Time(6)
+  close_time             DateTime? @db.Time(6)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_schedules_field")
+}
+
+model field_special_pricing {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int
+  name                   String    @db.VarChar(255)
+  description            String?
+  price                  Decimal   @db.Decimal(10, 2)
+  discount_type          String    @default("percentage") @db.VarChar(20)
+  time_ranges            Json?
+  days                   Json?
+  is_active              Boolean?  @default(true)
+  status                 String?   @default("active") @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_special_pricing_field")
+}
+
+model field_sports {
+  id                     Int         @id @default(autoincrement())
+  field_id               Int
+  sport_id               Int
+  user_id_registration   Int?
+  date_time_registration DateTime?   @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?   @db.Timestamptz(6)
+  fields                 fields      @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_sports_field")
+  sport_types            sport_types @relation(fields: [sport_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_sports_sport")
+
+  @@unique([field_id, sport_id], map: "uk_field_sports")
+}
+
+model field_videos {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int
+  video_url              String
+  title                  String?   @db.VarChar(255)
+  description            String?
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_videos_field")
+}
+
+model fields {
+  id                              Int                           @id @default(autoincrement())
+  admin_id                        Int
+  name                            String                        @db.VarChar(255)
+  location                        String?
+  departamento                    String?                       @db.VarChar(100)
+  provincia                       String?                       @db.VarChar(100)
+  distrito                        String?                       @db.VarChar(100)
+  district_id                     Int?
+  address                         String?
+  phone                           String?                       @db.VarChar(20)
+  latitude                        Decimal?                      @db.Decimal(10, 8)
+  longitude                       Decimal?                      @db.Decimal(11, 8)
+  price_per_hour                  Decimal                       @db.Decimal(10, 2)
+  status                          String?                       @default("available") @db.VarChar(20)
+  approval_status                 String?                       @default("pending") @db.VarChar(20)
+  field_type                      String?                       @db.VarChar(50)
+  sport_type                      Int?
+  capacity                        Int?
+  requires_advance_payment        Boolean?                      @default(false)
+  is_active                       Boolean?                      @default(true)
+  is_multi_sport                  Boolean?                      @default(false)
+  rating                          Decimal?                      @default(0.00) @db.Decimal(3, 2)
+  total_reviews                   Int?                          @default(0)
+  approved_by                     Int?
+  approved_at                     DateTime?                     @db.Timestamptz(6)
+  rejected_by                     Int?
+  rejected_at                     DateTime?                     @db.Timestamptz(6)
+  rejection_reason                String?
+  created_by                      Int?
+  user_id_registration            Int?
+  date_time_registration          DateTime?                     @default(now()) @db.Timestamptz(6)
+  user_id_modification            Int?
+  date_time_modification          DateTime?                     @db.Timestamptz(6)
+  advance_payment_amount          Decimal?                      @default(0.00) @db.Decimal(10, 2)
+  alerts                          alerts[]
+  coupon_fields                   coupon_fields[]
+  field_amenities                 field_amenities[]
+  field_cancellation_policies     field_cancellation_policies?
+  field_dimensions                field_dimensions?
+  field_equipment                 field_equipment?
+  field_images                    field_images[]
+  field_maintenance_schedules     field_maintenance_schedules[]
+  field_payment_methods           field_payment_methods[]
+  field_rules                     field_rules[]
+  field_schedules                 field_schedules[]
+  field_special_pricing           field_special_pricing[]
+  field_sports                    field_sports[]
+  field_videos                    field_videos[]
+  users_fields_admin_idTousers    users                         @relation("fields_admin_idTousers", fields: [admin_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_fields_admin")
+  users_fields_approved_byTousers users?                        @relation("fields_approved_byTousers", fields: [approved_by], references: [id], onUpdate: NoAction, map: "fk_fields_approved_by")
+  users_fields_created_byTousers  users?                        @relation("fields_created_byTousers", fields: [created_by], references: [id], onUpdate: NoAction, map: "fk_fields_created_by")
+  districts                       districts?                    @relation(fields: [district_id], references: [id], onUpdate: NoAction, map: "fk_fields_district")
+  users_fields_rejected_byTousers users?                        @relation("fields_rejected_byTousers", fields: [rejected_by], references: [id], onUpdate: NoAction, map: "fk_fields_rejected_by")
+  sport_types                     sport_types?                  @relation(fields: [sport_type], references: [id], onUpdate: NoAction, map: "fk_fields_sport_type")
+  monthly_payments                monthly_payments[]
+  payment_configs                 payment_configs?
+  payments                        payments[]
+  promotion_rule_fields           promotion_rule_fields[]
+  refunds                         refunds[]
+  reservations                    reservations[]
+  reviews                         reviews[]
+  user_managed_fields             user_managed_fields[]
+
+  @@index([admin_id], map: "idx_fields_admin_id")
+  @@index([approval_status], map: "idx_fields_approval_status")
+  @@index([departamento], map: "idx_fields_departamento")
+  @@index([district_id], map: "idx_fields_district_id")
+  @@index([distrito], map: "idx_fields_distrito")
+  @@index([is_active], map: "idx_fields_is_active")
+  @@index([provincia], map: "idx_fields_provincia")
+  @@index([sport_type], map: "idx_fields_sport_type")
+  @@index([status], map: "idx_fields_status")
+}
+
+model payment_configs {
+  id                     Int                @id @default(autoincrement())
+  field_id               Int                @unique
+  admin_id               Int
+  monthly_fee            Decimal            @db.Decimal(10, 2)
+  due_day                Int
+  effective_from         DateTime           @default(now()) @db.Date
+  is_active              Boolean?           @default(true)
+  status                 String?            @default("active") @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime?          @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?          @db.Timestamptz(6)
+  monthly_payments       monthly_payments[]
+  users                  users              @relation(fields: [admin_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_payment_configs_admin")
+  fields                 fields             @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_payment_configs_field")
+}
+
+model monthly_payments {
+  id                     Int              @id @default(autoincrement())
+  field_id               Int
+  admin_id               Int
+  payment_config_id      Int?
+  month                  Int
+  year                   Int
+  amount                 Decimal          @db.Decimal(10, 2)
+  due_date               DateTime         @db.Date
+  status                 String?          @default("pending") @db.VarChar(20)
+  paid_at                DateTime?        @db.Timestamptz(6)
+  paid_amount            Decimal?         @default(0) @db.Decimal(10, 2)
+  payment_method         String?          @db.VarChar(50)
+  payment_reference      String?          @db.VarChar(255)
+  notes                  String?
+  generated_by           Int?
+  user_id_registration   Int?
+  date_time_registration DateTime?        @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?        @db.Timestamptz(6)
+  confirmed_at           DateTime?        @db.Timestamptz(6)
+  confirmed_by           Int?
+  payment_voucher_url    String?          @db.VarChar(500)
+  reported_at            DateTime?        @db.Timestamptz(6)
+  reported_by            Int?
+  users                  users            @relation(fields: [admin_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_monthly_payments_admin")
+  payment_configs        payment_configs? @relation(fields: [payment_config_id], references: [id], onUpdate: NoAction, map: "fk_monthly_payments_config")
+  fields                 fields           @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_monthly_payments_field")
+
+  @@unique([field_id, month, year], map: "uk_monthly_payment")
+  @@index([field_id], map: "idx_monthly_payments_field")
+  @@index([admin_id], map: "idx_monthly_payments_admin")
+  @@index([status], map: "idx_monthly_payments_status")
+  @@index([month, year], map: "idx_monthly_payments_month_year")
+}
+
+model payments {
+  id                                  Int       @id @default(autoincrement())
+  field_id                            Int
+  admin_id                            Int
+  month                               String    @db.VarChar(7)
+  due_date                            DateTime  @db.Date
+  amount                              Decimal   @db.Decimal(10, 2)
+  status                              String?   @default("pending") @db.VarChar(20)
+  paid_date                           DateTime? @db.Timestamptz(6)
+  payment_method                      String?   @db.VarChar(50)
+  operation_number                    String?   @db.VarChar(100)
+  notes                               String?
+  registered_by                       Int?
+  user_id_registration                Int?
+  date_time_registration              DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification                Int?
+  date_time_modification              DateTime? @db.Timestamptz(6)
+  users_payments_admin_idTousers      users     @relation("payments_admin_idTousers", fields: [admin_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_payments_admin")
+  fields                              fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_payments_field")
+  users_payments_registered_byTousers users?    @relation("payments_registered_byTousers", fields: [registered_by], references: [id], onUpdate: NoAction, map: "fk_payments_registered_by")
+
+  @@index([admin_id], map: "idx_payments_admin_id")
+  @@index([field_id], map: "idx_payments_field_id")
+  @@index([month], map: "idx_payments_month")
+  @@index([status], map: "idx_payments_status")
+}
+
+model permissions {
+  id                     Int                 @id @default(autoincrement())
+  name                   String              @unique @db.VarChar(100)
+  description            String?
+  module                 String?             @db.VarChar(50)
+  is_active              Boolean?            @default(true)
+  user_id_registration   Int?
+  date_time_registration DateTime?           @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?           @db.Timestamptz(6)
+  roles_permissions      roles_permissions[]
+}
+
+model promotion_rule_fields {
+  id                     Int             @id @default(autoincrement())
+  rule_id                Int
+  field_id               Int
+  user_id_registration   Int?
+  date_time_registration DateTime?       @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?       @db.Timestamptz(6)
+  fields                 fields          @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_promotion_rule_fields_field")
+  promotion_rules        promotion_rules @relation(fields: [rule_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_promotion_rule_fields_rule")
+
+  @@unique([rule_id, field_id], map: "uk_promotion_rule_fields")
+}
+
+model promotion_rule_sports {
+  id                     Int             @id @default(autoincrement())
+  rule_id                Int
+  sport_id               Int
+  user_id_registration   Int?
+  date_time_registration DateTime?       @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?       @db.Timestamptz(6)
+  promotion_rules        promotion_rules @relation(fields: [rule_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_promotion_rule_sports_rule")
+  sport_types            sport_types     @relation(fields: [sport_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_promotion_rule_sports_sport")
+
+  @@unique([rule_id, sport_id], map: "uk_promotion_rule_sports")
+}
+
+model promotion_rules {
+  id                             Int                              @id @default(autoincrement())
+  name                           String                           @db.VarChar(255)
+  description                    String?
+  hours_required                 Decimal                          @db.Decimal(10, 2)
+  free_hours                     Decimal                          @db.Decimal(10, 2)
+  applies_to                     String                           @db.VarChar(20)
+  is_active                      Boolean?                         @default(true)
+  created_by                     Int
+  status                         String?                          @default("active") @db.VarChar(20)
+  user_id_registration           Int?
+  date_time_registration         DateTime?                        @default(now()) @db.Timestamptz(6)
+  user_id_modification           Int?
+  date_time_modification         DateTime?                        @db.Timestamptz(6)
+  customer_promotion_redemptions customer_promotion_redemptions[]
+  promotion_rule_fields          promotion_rule_fields[]
+  promotion_rule_sports          promotion_rule_sports[]
+  users                          users                            @relation(fields: [created_by], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_promotion_rules_created_by")
+}
+
+model provinces {
+  id                     Int         @id @default(autoincrement())
+  code                   String      @unique @db.VarChar(4)
+  name                   String      @db.VarChar(100)
+  department_id          Int
+  user_id_registration   Int?
+  date_time_registration DateTime?   @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?   @db.Timestamptz(6)
+  districts              districts[]
+  departments            departments @relation(fields: [department_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_provinces_department")
+
+  @@index([department_id], map: "idx_provinces_department_id")
+}
+
+model refunds {
+  id                     Int          @id @default(autoincrement())
+  reservation_id         Int          @unique
+  customer_id            Int
+  customer_name          String       @db.VarChar(255)
+  phone_number           String       @db.VarChar(20)
+  field_id               Int
+  refund_amount          Decimal      @db.Decimal(10, 2)
+  status                 String?      @default("pending") @db.VarChar(20)
+  cancelled_at           DateTime     @db.Timestamptz(6)
+  cancellation_reason    String?
+  processed_at           DateTime?    @db.Timestamptz(6)
+  processed_by           Int?
+  user_id_registration   Int?
+  date_time_registration DateTime?    @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?    @db.Timestamptz(6)
+  customers              customers    @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_refunds_customer")
+  fields                 fields       @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_refunds_field")
+  users                  users?       @relation(fields: [processed_by], references: [id], onUpdate: NoAction, map: "fk_refunds_processed_by")
+  reservations           reservations @relation(fields: [reservation_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_refunds_reservation")
+
+  @@index([customer_id], map: "idx_refunds_customer_id")
+}
+
+model registration_requests {
+  id                     Int       @id @default(autoincrement())
+  name                   String    @db.VarChar(255)
+  email                  String    @db.VarChar(255)
+  phone                  String    @db.VarChar(20)
+  dni                    String?   @db.VarChar(8)
+  field_name             String    @db.VarChar(255)
+  address                String
+  department             String    @db.VarChar(100)
+  province               String    @db.VarChar(100)
+  district               String    @db.VarChar(100)
+  documents              Json?
+  status                 String?   @default("pending") @db.VarChar(20)
+  reviewed_by            Int?
+  reviewed_at            DateTime? @db.Timestamptz(6)
+  rejection_reason       String?
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  users                  users?    @relation(fields: [reviewed_by], references: [id], onUpdate: NoAction, map: "fk_registration_requests_reviewed_by")
+
+  @@index([date_time_registration], map: "idx_registration_requests_created_at")
+}
+
+model reservation_time_slots {
+  id                     Int          @id @default(autoincrement())
+  reservation_id         Int
+  time_slot              String       @db.VarChar(50)
+  user_id_registration   Int?
+  date_time_registration DateTime?    @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?    @db.Timestamptz(6)
+  reservations           reservations @relation(fields: [reservation_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_reservation_time_slots_reservation")
+}
+
+model reservations {
+  id                                    Int                      @id @default(autoincrement())
+  field_id                              Int
+  customer_id                           Int
+  date                                  DateTime                 @db.Date
+  start_time                            DateTime                 @db.Time(6)
+  end_time                              DateTime                 @db.Time(6)
+  subtotal                              Decimal                  @db.Decimal(10, 2)
+  discount                              Decimal?                 @default(0.00) @db.Decimal(10, 2)
+  total_price                           Decimal                  @db.Decimal(10, 2)
+  advance_payment                       Decimal?                 @default(0.00) @db.Decimal(10, 2)
+  remaining_payment                     Decimal?                 @default(0.00) @db.Decimal(10, 2)
+  payment_method                        String?                  @db.VarChar(50)
+  payment_status                        String?                  @default("pending") @db.VarChar(20)
+  payment_voucher_url                   String?
+  status                                String?                  @default("pending") @db.VarChar(20)
+  type                                  String?                  @default("customer_booking") @db.VarChar(20)
+  hours                                 Decimal                  @db.Decimal(5, 2)
+  coupon_id                             Int?
+  coupon_discount                       Decimal?                 @default(0.00) @db.Decimal(10, 2)
+  reviewed                              Boolean?                 @default(false)
+  review_id                             Int?
+  cancelled_by                          String?                  @db.VarChar(20)
+  cancellation_reason                   String?
+  advance_kept                          Decimal?                 @default(0.00) @db.Decimal(10, 2)
+  lost_revenue                          Decimal?                 @default(0.00) @db.Decimal(10, 2)
+  completed_at                          DateTime?                @db.Timestamptz(6)
+  cancelled_at                          DateTime?                @db.Timestamptz(6)
+  no_show_date                          DateTime?                @db.Timestamptz(6)
+  user_id_registration                  Int?
+  date_time_registration                DateTime?                @default(now()) @db.Timestamptz(6)
+  user_id_modification                  Int?
+  date_time_modification                DateTime?                @db.Timestamptz(6)
+  free_hours_used                       Decimal?                 @default(0) @db.Decimal(10, 2)
+  free_hours_discount                   Decimal?                 @default(0) @db.Decimal(10, 2)
+  approved_by                           Int?
+  approved_at                           DateTime?                @db.Timestamptz(6)
+  rejected_by                           Int?
+  rejected_at                           DateTime?                @db.Timestamptz(6)
+  alerts                                alerts[]
+  coupon_usage                          coupon_usage[]
+  refunds                               refunds?
+  reservation_time_slots                reservation_time_slots[]
+  users_reservations_approved_byTousers users?                   @relation("reservations_approved_byTousers", fields: [approved_by], references: [id], onUpdate: NoAction, map: "fk_reservations_approved_by")
+  coupons                               coupons?                 @relation(fields: [coupon_id], references: [id], onUpdate: NoAction, map: "fk_reservations_coupon")
+  customers                             customers                @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_reservations_customer")
+  fields                                fields                   @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_reservations_field")
+  users_reservations_rejected_byTousers users?                   @relation("reservations_rejected_byTousers", fields: [rejected_by], references: [id], onUpdate: NoAction, map: "fk_reservations_rejected_by")
+  reviews                               reviews?
+
+  @@index([date_time_registration], map: "idx_reservations_created_at")
+  @@index([customer_id], map: "idx_reservations_customer_id")
+  @@index([date], map: "idx_reservations_date")
+  @@index([field_id, date], map: "idx_reservations_field_date")
+  @@index([field_id], map: "idx_reservations_field_id")
+  @@index([payment_status], map: "idx_reservations_payment_status")
+  @@index([status], map: "idx_reservations_status")
+  @@index([approved_at], map: "idx_reservations_approved_at")
+  @@index([approved_by], map: "idx_reservations_approved_by")
+}
+
+model reviews {
+  id                     Int          @id @default(autoincrement())
+  reservation_id         Int          @unique
+  field_id               Int
+  customer_id            Int
+  customer_name          String       @db.VarChar(255)
+  cleanliness            Int
+  service                Int
+  facilities             Int
+  overall_rating         Decimal      @db.Decimal(3, 2)
+  comment                String?
+  is_visible             Boolean?     @default(true)
+  status                 String?      @default("active") @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime?    @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?    @db.Timestamptz(6)
+  customers              customers    @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_reviews_customer")
+  fields                 fields       @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_reviews_field")
+  reservations           reservations @relation(fields: [reservation_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_reviews_reservation")
+
+  @@index([customer_id], map: "idx_reviews_customer_id")
+  @@index([field_id], map: "idx_reviews_field_id")
+  @@index([is_visible], map: "idx_reviews_is_visible")
+}
+
+model roles {
+  id                     Int                 @id @default(autoincrement())
+  name                   String              @unique @db.VarChar(50)
+  description            String?
+  is_active              Boolean?            @default(true)
+  user_id_registration   Int?
+  date_time_registration DateTime?           @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?           @db.Timestamptz(6)
+  roles_permissions      roles_permissions[]
+  users                  users[]
+}
+
+model roles_permissions {
+  id                     Int         @id @default(autoincrement())
+  role_id                Int
+  permission_id          Int
+  user_id_registration   Int?
+  date_time_registration DateTime?   @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?   @db.Timestamptz(6)
+  permissions            permissions @relation(fields: [permission_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_roles_permissions_permission")
+  roles                  roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_roles_permissions_role")
+
+  @@unique([role_id, permission_id], map: "uk_roles_permissions")
+}
+
+model site_config {
+  id                     Int       @id @default(autoincrement())
+  key                    String    @unique @db.VarChar(100)
+  value                  Json
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+}
+
+model social_media {
+  id                     Int       @id @default(autoincrement())
+  platform               String    @db.VarChar(50)
+  url                    String
+  icon                   String?   @db.VarChar(255)
+  enabled                Boolean?  @default(true)
+  order_index            Int?      @default(0)
+  status                 String?   @default("active") @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  color                  String?   @default("#22c55e") @db.VarChar(20)
+  is_phone               Boolean?  @default(false)
+}
+
+model sport_types {
+  id                     Int                     @id @default(autoincrement())
+  name                   String                  @unique @db.VarChar(100)
+  icon                   String?                 @db.VarChar(255)
+  color                  String?                 @db.VarChar(20)
+  description            String?
+  is_active              Boolean?                @default(true)
+  status                 String?                 @default("active") @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime?               @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime?               @db.Timestamptz(6)
+  field_sports           field_sports[]
+  fields                 fields[]
+  promotion_rule_sports  promotion_rule_sports[]
+}
+
+model time_ranges {
+  id                     Int       @id @default(autoincrement())
+  start_time             DateTime  @db.Time(6)
+  end_time               DateTime  @db.Time(6)
+  label                  String    @db.VarChar(50)
+  order_index            Int
+  is_active              Boolean?  @default(true)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+
+  @@unique([start_time, end_time], map: "uk_time_ranges_times")
+}
+
+model user_managed_fields {
+  id                                           Int       @id @default(autoincrement())
+  user_id                                      Int
+  field_id                                     Int
+  assigned_at                                  DateTime? @default(now()) @db.Timestamptz(6)
+  assigned_by                                  Int?
+  user_id_registration                         Int?
+  date_time_registration                       DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification                         Int?
+  date_time_modification                       DateTime? @db.Timestamptz(6)
+  users_user_managed_fields_assigned_byTousers users?    @relation("user_managed_fields_assigned_byTousers", fields: [assigned_by], references: [id], onUpdate: NoAction, map: "fk_user_managed_fields_assigned_by")
+  fields                                       fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_user_managed_fields_field")
+  users_user_managed_fields_user_idTousers     users     @relation("user_managed_fields_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_user_managed_fields_user")
+
+  @@unique([user_id, field_id], map: "uk_user_managed_fields")
+}
+
+model user_permissions {
+  id                     Int       @id @default(autoincrement())
+  user_id                Int
+  permission             String    @db.VarChar(100)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  users                  users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_user_permissions_user")
+}
+
+model users {
+  id                                                         Int                     @id @default(autoincrement())
+  username                                                   String                  @unique @db.VarChar(100)
+  email                                                      String                  @unique @db.VarChar(255)
+  password_hash                                              String                  @db.VarChar(255)
+  role_id                                                    Int
+  admin_type                                                 String?                 @db.VarChar(20)
+  name                                                       String                  @db.VarChar(255)
+  phone                                                      String?                 @db.VarChar(20)
+  avatar_url                                                 String?
+  is_active                                                  Boolean?                @default(true)
+  last_login                                                 DateTime?               @db.Timestamptz(6)
+  created_by                                                 Int?
+  login_attempts                                             Int?                    @default(0)
+  last_login_attempt                                         DateTime?               @db.Timestamptz(6)
+  is_blocked                                                 Boolean?                @default(false)
+  block_until                                                DateTime?               @db.Timestamptz(6)
+  status                                                     String?                 @default("active") @db.VarChar(20)
+  user_id_registration                                       Int?
+  date_time_registration                                     DateTime?               @default(now()) @db.Timestamptz(6)
+  user_id_modification                                       Int?
+  date_time_modification                                     DateTime?               @db.Timestamptz(6)
+  activity_logs                                              activity_logs[]
+  alerts_alerts_admin_idTousers                              alerts[]                @relation("alerts_admin_idTousers")
+  alerts_alerts_user_idTousers                               alerts[]                @relation("alerts_user_idTousers")
+  blacklist                                                  blacklist[]
+  booking_alert_rules                                        booking_alert_rules[]
+  coupon_usage                                               coupon_usage[]
+  coupons                                                    coupons[]
+  customers_customers_created_byTousers                      customers[]             @relation("customers_created_byTousers")
+  customers_customers_user_idTousers                         customers[]             @relation("customers_user_idTousers")
+  fields_fields_admin_idTousers                              fields[]                @relation("fields_admin_idTousers")
+  fields_fields_approved_byTousers                           fields[]                @relation("fields_approved_byTousers")
+  fields_fields_created_byTousers                            fields[]                @relation("fields_created_byTousers")
+  fields_fields_rejected_byTousers                           fields[]                @relation("fields_rejected_byTousers")
+  monthly_payments                                           monthly_payments[]
+  password_reset_tokens                                      password_reset_tokens[]
+  payment_configs                                            payment_configs[]
+  payments_payments_admin_idTousers                          payments[]              @relation("payments_admin_idTousers")
+  payments_payments_registered_byTousers                     payments[]              @relation("payments_registered_byTousers")
+  promotion_rules                                            promotion_rules[]
+  refunds                                                    refunds[]
+  registration_requests                                      registration_requests[]
+  reservations_reservations_approved_byTousers               reservations[]          @relation("reservations_approved_byTousers")
+  reservations_reservations_rejected_byTousers               reservations[]          @relation("reservations_rejected_byTousers")
+  user_managed_fields_user_managed_fields_assigned_byTousers user_managed_fields[]   @relation("user_managed_fields_assigned_byTousers")
+  user_managed_fields_user_managed_fields_user_idTousers     user_managed_fields[]   @relation("user_managed_fields_user_idTousers")
+  user_permissions                                           user_permissions[]
+  users                                                      users?                  @relation("usersTousers", fields: [created_by], references: [id], onUpdate: NoAction, map: "fk_users_created_by")
+  other_users                                                users[]                 @relation("usersTousers")
+  roles                                                      roles                   @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_users_role")
+
+  @@index([email], map: "idx_users_email")
+  @@index([email, phone], map: "idx_users_email_phone")
+  @@index([is_active], map: "idx_users_is_active")
+  @@index([phone], map: "idx_users_phone")
+  @@index([role_id], map: "idx_users_role_id")
+  @@index([username], map: "idx_users_username")
+}
+
+model field_payment_methods {
+  id                     Int       @id @default(autoincrement())
+  field_id               Int
+  method_type            String    @db.VarChar(20)
+  is_enabled             Boolean?  @default(true)
+  account_number         String?   @db.VarChar(50)
+  account_holder         String?   @db.VarChar(255)
+  phone_number           String?   @db.VarChar(20)
+  qr_image_url           String?
+  bank_name              String?   @db.VarChar(100)
+  cci_number             String?   @db.VarChar(30)
+  instructions           String?
+  order_index            Int?      @default(0)
+  status                 String?   @default("active") @db.VarChar(20)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_payment_methods_field")
+
+  @@unique([field_id, method_type], map: "uk_field_payment_methods")
+  @@index([field_id], map: "idx_field_payment_methods_field_id")
+}
+
+model badge_criteria {
+  id                     Int       @id @default(autoincrement())
+  code                   String    @unique @db.VarChar(50)
+  name                   String    @db.VarChar(255)
+  description            String?
+  calculation_table      String    @db.VarChar(100)
+  calculation_field      String    @db.VarChar(100)
+  calculation_type       String    @default("count") @db.VarChar(20)
+  filter_conditions      Json?
+  is_active              Boolean?  @default(true)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+  badges                 badges[]
+
+  @@index([code], map: "idx_badge_criteria_code")
+}
+
+model customer_promotion_redemptions {
+  id                     Int             @id @default(autoincrement())
+  customer_id            Int
+  promotion_rule_id      Int
+  hours_earned           Decimal         @db.Decimal(10, 2)
+  redeemed_at            DateTime?       @default(now()) @db.Timestamptz(6)
+  user_id_registration   Int?
+  date_time_registration DateTime?       @default(now()) @db.Timestamptz(6)
+  customers              customers       @relation(fields: [customer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  promotion_rules        promotion_rules @relation(fields: [promotion_rule_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([customer_id, promotion_rule_id], map: "customer_promotion_redemption_customer_id_promotion_rule_id_key")
+  @@index([customer_id], map: "idx_cpr_customer")
+  @@index([promotion_rule_id], map: "idx_cpr_promotion")
+}
+
+model platform_payment_methods {
+  id                     Int       @id @default(autoincrement())
+  method_type            String    @db.VarChar(30)
+  name                   String    @db.VarChar(100)
+  bank_name              String?   @db.VarChar(100)
+  account_number         String?   @db.VarChar(50)
+  account_holder         String?   @db.VarChar(255)
+  cci_number             String?   @db.VarChar(30)
+  phone_number           String?   @db.VarChar(20)
+  qr_image_url           String?   @db.VarChar(500)
+  instructions           String?
+  is_active              Boolean?  @default(true)
+  order_index            Int?      @default(0)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+
+  @@index([is_active], map: "idx_platform_payment_methods_active")
+  @@index([method_type], map: "idx_platform_payment_methods_type")
+}
+
+
+model gamification_config {
+  id                     Int       @id @default(autoincrement())
+  config_key             String    @unique @db.VarChar(100)
+  config_value           String?   @db.VarChar(500)
+  description            String?   @db.VarChar(255)
+  user_id_modification   Int?
+  date_time_modification DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model password_reset_tokens {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  token_hash String    @db.VarChar(255)
+  expires_at DateTime  @db.Timestamptz(6)
+  used       Boolean?  @default(false)
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([token_hash], map: "idx_prt_token_hash")
+  @@index([user_id], map: "idx_prt_user_id")
+}
