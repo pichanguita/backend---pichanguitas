@@ -12,7 +12,7 @@
     "format:check": "prettier --check .",
     "build": "npx prisma generate && echo Build completado exitosamente",
     "railway:build": "npx prisma generate",
-    "railway:start": "npx prisma migrate deploy && node prisma/seed.js && node index.js",
+    "railway:start": "node prisma/pre-migrate.js && npx prisma migrate deploy && node prisma/seed.js && node index.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "prisma:generate": "npx prisma generate",
     "prisma:migrate": "npx prisma migrate dev",
