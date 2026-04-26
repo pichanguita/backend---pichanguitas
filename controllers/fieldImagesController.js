@@ -11,6 +11,25 @@ const {
   reorderImages,
 } = require('../models/fieldImagesModel');
 const { uploadFile, deleteFile, extractKeyFromUrl, toProxyUrl } = require('../services/wasabiService');
+const { WASABI_FOLDERS } = require('../config/storage');
+const pool = require('../config/db');
+const {
+  logActivity,
+  resolveIp,
+  ACTIVITY_TYPES,
+  ACTIVITY_STATUS,
+} = require('../services/activityLogsService');
+
+const getFieldAdminId = async fieldId => {
+  try {
+    const { rows } = await pool.query('SELECT admin_id, name FROM fields WHERE id = $1', [
+      fieldId,
+    ]);
+    return rows[0] || null;
+  } catch (_e) {
+    return null;
+  }
+};
 
 /**
  * Obtener todas las imagenes con filtros
@@ -391,7 +410,7 @@ const uploadFieldImage = async (req, res) => {
       buffer: req.file.buffer,
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
-      folder: 'fields-photos',
+      folder: WASABI_FOLDERS.FIELDS_PHOTOS,
       customFilename: `field${field_id}_${Date.now()}`,
     });
 
@@ -406,6 +425,21 @@ const uploadFieldImage = async (req, res) => {
     };
 
     const newImage = await createFieldImage(imageData);
+
+    // Registro de actividad del admin dueño de la cancha
+    const fieldInfo = await getFieldAdminId(parseInt(field_id));
+    if (fieldInfo?.admin_id) {
+      await logActivity({
+        userId: fieldInfo.admin_id,
+        action: 'field.image_uploaded',
+        entityType: ACTIVITY_TYPES.FIELD,
+        entityId: parseInt(field_id),
+        description: `Imagen agregada a la cancha "${fieldInfo.name}"`,
+        status: ACTIVITY_STATUS.SUCCESS,
+        ipAddress: resolveIp(req),
+        actorUserId: req.user?.id ?? fieldInfo.admin_id,
+      });
+    }
 
     res.status(201).json({
       success: true,

@@ -1,41 +1,117 @@
 /**
  * Servicio de almacenamiento en Wasabi (S3-compatible)
  *
- * Funciones centralizadas para subir, eliminar y obtener URLs de archivos
- * almacenados en Wasabi Cloud Storage.
+ * Funciones centralizadas para subir, eliminar, listar y obtener URLs
+ * de archivos almacenados en Wasabi Cloud Storage.
  *
- * Usa presigned URLs para garantizar acceso sin depender de
- * configuración de acceso público del bucket.
+ * Los objetos se guardan privados. El acceso se sirve vía:
+ *   - Proxy público   → /api/media/<key>   (para archivos no sensibles)
+ *   - Endpoint autenticado en cada módulo (para archivos sensibles)
+ *   - Presigned URLs   → firma temporal    (para casos especiales)
  */
 
 const {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectsV2Command,
   HeadBucketCommand,
   CreateBucketCommand,
-  PutBucketPolicyCommand,
   PutBucketCorsCommand,
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const path = require('path');
-const { s3Client, WASABI_BUCKET, WASABI_REGION } = require('../config/wasabi');
 
-// Duración de las presigned URLs: 7 días (en segundos)
-const PRESIGNED_URL_EXPIRY = 7 * 24 * 60 * 60;
+const { s3Client, WASABI_BUCKET, WASABI_REGION } = require('../config/wasabi');
+const { PRESIGNED_URL_EXPIRY, MEDIA_PROXY_PATH } = require('../config/storage');
+
+// ========================================
+// HELPERS INTERNOS
+// ========================================
+
+const MIME_TO_EXT = Object.freeze({
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'application/pdf': '.pdf',
+  'application/msword': '.doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'text/plain': '.txt',
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+  'video/x-msvideo': '.avi',
+});
+
+const getExtFromMimetype = mimetype => MIME_TO_EXT[mimetype] || '.bin';
+
+// ========================================
+// URL HELPERS
+// ========================================
 
 /**
- * Genera la URL pública base de un objeto en Wasabi (puede no ser accesible si el bucket es privado)
+ * URL S3 estándar (no firmada). Solo sirve cuando el objeto es público;
+ * con ACL privada devuelve 403. Se usa como formato canónico interno.
  */
-const getPublicUrl = (key) => {
+const getPublicUrl = key => {
+  if (!key) return null;
   return `https://s3.${WASABI_REGION}.wasabisys.com/${WASABI_BUCKET}/${key}`;
 };
 
 /**
- * Genera una presigned URL para acceder a un objeto (funciona sin importar la config del bucket)
- * @param {string} key - Key del objeto en el bucket
- * @param {number} [expiresIn] - Duración en segundos (default: 7 días)
- * @returns {Promise<string>} URL firmada
+ * Extrae la key de cualquier URL almacenada: Wasabi directa, presigned
+ * (con query params), proxy `/api/media/...` o rutas heredadas `/uploads/...`.
+ */
+const extractKeyFromUrl = url => {
+  if (!url) return null;
+
+  const cleanUrl = url.split('?')[0];
+
+  if (cleanUrl.includes('wasabisys.com')) {
+    const bucketPrefix = `${WASABI_BUCKET}/`;
+    const idx = cleanUrl.indexOf(bucketPrefix);
+    if (idx !== -1) {
+      return cleanUrl.substring(idx + bucketPrefix.length);
+    }
+  }
+
+  if (cleanUrl.startsWith(`${MEDIA_PROXY_PATH}/`)) {
+    return cleanUrl.substring(MEDIA_PROXY_PATH.length + 1);
+  }
+
+  if (cleanUrl.startsWith('/uploads/')) {
+    return cleanUrl.replace('/uploads/', '');
+  }
+
+  // Si ya es una key pelada (folder/filename)
+  if (!cleanUrl.startsWith('http') && !cleanUrl.startsWith('/')) {
+    return cleanUrl;
+  }
+
+  return null;
+};
+
+/**
+ * Convierte cualquier URL/key a la ruta pública del proxy del backend.
+ * Ej: https://s3.../fields-photos/a.jpg → /api/media/fields-photos/a.jpg
+ */
+const toProxyUrl = url => {
+  if (!url) return null;
+  const key = extractKeyFromUrl(url);
+  if (!key) return url;
+  return `${MEDIA_PROXY_PATH}/${key}`;
+};
+
+/**
+ * Genera la ruta de proxy directamente desde una key (sin pasar por URL).
+ */
+const keyToProxyUrl = key => (key ? `${MEDIA_PROXY_PATH}/${key}` : null);
+
+/**
+ * Presigned URL temporal para acceso directo al objeto (expira).
+ * Útil para compartir enlaces firmados fuera del flujo habitual de proxy.
  */
 const getPresignedUrl = async (key, expiresIn = PRESIGNED_URL_EXPIRY) => {
   if (!key) return null;
@@ -46,99 +122,58 @@ const getPresignedUrl = async (key, expiresIn = PRESIGNED_URL_EXPIRY) => {
   return getSignedUrl(s3Client, command, { expiresIn });
 };
 
-/**
- * Convierte una URL de Wasabi almacenada en BD a una presigned URL accesible.
- * Si la URL no es de Wasabi, la devuelve tal cual.
- * @param {string} url - URL almacenada en BD
- * @returns {Promise<string>} URL accesible (presigned o original)
- */
-const toAccessibleUrl = async (url) => {
-  if (!url) return null;
-  const key = extractKeyFromUrl(url);
-  if (!key) return url;
-  return getPresignedUrl(key);
-};
+// ========================================
+// UPLOAD
+// ========================================
 
 /**
- * Determina la extensión del archivo a partir del mimetype
- */
-const getExtFromMimetype = (mimetype) => {
-  const mimeToExt = {
-    'image/jpeg': '.jpg',
-    'image/jpg': '.jpg',
-    'image/png': '.png',
-    'image/gif': '.gif',
-    'image/webp': '.webp',
-    'application/pdf': '.pdf',
-    'application/msword': '.doc',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-    'text/plain': '.txt',
-    'video/mp4': '.mp4',
-    'video/quicktime': '.mov',
-    'video/x-msvideo': '.avi',
-  };
-  return mimeToExt[mimetype] || '.bin';
-};
-
-/**
- * Sube un archivo a Wasabi
+ * Sube un buffer a Wasabi en la carpeta indicada. Los archivos quedan
+ * privados (sin ACL público); el acceso se sirve por proxy / endpoint
+ * autenticado / presigned URL según el caso.
  *
- * @param {Object} params
- * @param {Buffer} params.buffer - El buffer del archivo (de multer memoryStorage)
- * @param {string} params.originalname - Nombre original del archivo
- * @param {string} params.mimetype - Tipo MIME del archivo
- * @param {string} params.folder - Carpeta destino en el bucket (ej: 'fields-photos')
- * @param {string} [params.customFilename] - Nombre personalizado (sin extensión)
- * @returns {Promise<{key: string, url: string, presignedUrl: string, filename: string, size: number}>}
+ * @returns {{key: string, url: string, filename: string, size: number}}
  */
 const uploadFile = async ({ buffer, originalname, mimetype, folder, customFilename }) => {
-  // Determinar extensión
-  let ext = path.extname(originalname);
-  if (!ext || ext === '') {
-    ext = getExtFromMimetype(mimetype);
-  }
+  if (!buffer) throw new Error('uploadFile: buffer requerido');
+  if (!folder) throw new Error('uploadFile: folder requerido');
 
-  // Generar nombre de archivo
+  let ext = path.extname(originalname || '');
+  if (!ext) ext = getExtFromMimetype(mimetype);
+
   const filename = customFilename
     ? `${customFilename}${ext}`
     : `${Date.now()}_${Math.round(Math.random() * 1e6)}${ext}`;
 
-  // Key completo en el bucket: folder/filename
   const key = `${folder}/${filename}`;
 
-  const command = new PutObjectCommand({
-    Bucket: WASABI_BUCKET,
-    Key: key,
-    Body: buffer,
-    ContentType: mimetype,
-    ACL: 'public-read',
-  });
-
-  await s3Client.send(command);
-
-  // Generar presigned URL para acceso inmediato
-  const presignedUrl = await getPresignedUrl(key);
+  await s3Client.send(
+    new PutObjectCommand({
+      Bucket: WASABI_BUCKET,
+      Key: key,
+      Body: buffer,
+      ContentType: mimetype,
+    })
+  );
 
   return {
     key,
     url: getPublicUrl(key),
-    presignedUrl,
     filename,
     size: buffer.length,
   };
 };
 
-/**
- * Obtiene el stream de un objeto de Wasabi (para proxy)
- * @param {string} key - Key del objeto
- * @returns {Promise<{stream: ReadableStream, contentType: string, contentLength: number}>}
- */
-const getFileStream = async (key) => {
-  const command = new GetObjectCommand({
-    Bucket: WASABI_BUCKET,
-    Key: key,
-  });
-  const response = await s3Client.send(command);
+// ========================================
+// STREAM (proxy / descarga autenticada)
+// ========================================
+
+const getFileStream = async key => {
+  const response = await s3Client.send(
+    new GetObjectCommand({
+      Bucket: WASABI_BUCKET,
+      Key: key,
+    })
+  );
   return {
     stream: response.Body,
     contentType: response.ContentType,
@@ -146,91 +181,105 @@ const getFileStream = async (key) => {
   };
 };
 
+// ========================================
+// DELETE
+// ========================================
+
 /**
- * Elimina un archivo de Wasabi
- *
- * @param {string} key - La key del objeto (ej: 'fields-photos/field23_123456.jpg')
+ * Elimina un objeto. Silencioso si la key es falsy.
  */
-const deleteFile = async (key) => {
+const deleteFile = async key => {
   if (!key) return;
-
-  const command = new DeleteObjectCommand({
-    Bucket: WASABI_BUCKET,
-    Key: key,
-  });
-
-  await s3Client.send(command);
+  await s3Client.send(
+    new DeleteObjectCommand({
+      Bucket: WASABI_BUCKET,
+      Key: key,
+    })
+  );
 };
 
 /**
- * Extrae la key de Wasabi a partir de una URL completa
- * Ej: https://s3.us-east-1.wasabisys.com/pichanguitas-uploads/fields-photos/file.jpg
- *     => fields-photos/file.jpg
- *
- * También soporta rutas relativas antiguas:
- * Ej: /uploads/fields-photos/file.jpg => fields-photos/file.jpg
- *
- * También soporta presigned URLs (contienen query params):
- * Ej: https://s3.../pichanguitas-uploads/fields-photos/file.jpg?X-Amz-...
- *     => fields-photos/file.jpg
+ * Conveniencia: acepta tanto keys como URLs almacenadas.
+ * No lanza si la URL no pudo resolverse (log + retorna false).
  */
-const extractKeyFromUrl = (url) => {
-  if (!url) return null;
-
-  // Remover query params (presigned URLs)
-  const cleanUrl = url.split('?')[0];
-
-  // Si es una URL de Wasabi completa
-  if (cleanUrl.includes('wasabisys.com')) {
-    const bucketPrefix = `${WASABI_BUCKET}/`;
-    const idx = cleanUrl.indexOf(bucketPrefix);
-    if (idx !== -1) {
-      return cleanUrl.substring(idx + bucketPrefix.length);
-    }
+const deleteFileByUrl = async url => {
+  if (!url) return false;
+  const key = extractKeyFromUrl(url);
+  if (!key) {
+    console.warn('[Wasabi] deleteFileByUrl: no se pudo extraer key de', url);
+    return false;
   }
-
-  // Si es una ruta relativa antigua (/uploads/...)
-  if (cleanUrl.startsWith('/uploads/')) {
-    return cleanUrl.replace('/uploads/', '');
-  }
-
-  return null;
-};
-
-/**
- * Configura la política de acceso público de lectura en el bucket.
- */
-const ensureBucketPublicPolicy = async () => {
-  const policy = {
-    Version: '2012-10-17',
-    Statement: [
-      {
-        Sid: 'PublicReadGetObject',
-        Effect: 'Allow',
-        Principal: '*',
-        Action: 's3:GetObject',
-        Resource: `arn:aws:s3:::${WASABI_BUCKET}/*`,
-      },
-    ],
-  };
-
   try {
-    await s3Client.send(
-      new PutBucketPolicyCommand({
+    await deleteFile(key);
+    return true;
+  } catch (err) {
+    console.error('[Wasabi] Error al eliminar objeto:', key, err.message);
+    return false;
+  }
+};
+
+/**
+ * Elimina todos los objetos bajo un prefijo (simulación de carpeta).
+ * Útil al borrar una solicitud entera, por ejemplo.
+ */
+const deleteFolder = async prefix => {
+  if (!prefix) return 0;
+  const normalizedPrefix = prefix.endsWith('/') ? prefix : `${prefix}/`;
+
+  let continuationToken;
+  let totalDeleted = 0;
+
+  do {
+    const listResponse = await s3Client.send(
+      new ListObjectsV2Command({
         Bucket: WASABI_BUCKET,
-        Policy: JSON.stringify(policy),
+        Prefix: normalizedPrefix,
+        ContinuationToken: continuationToken,
       })
     );
-    console.log(`   [Wasabi] Política de acceso público configurada`);
-  } catch (error) {
-    console.warn(`   [Wasabi] Política pública no aplicada (presigned URLs activas): ${error.message}`);
-  }
+
+    const objects = listResponse.Contents || [];
+    if (objects.length > 0) {
+      await s3Client.send(
+        new DeleteObjectsCommand({
+          Bucket: WASABI_BUCKET,
+          Delete: {
+            Objects: objects.map(obj => ({ Key: obj.Key })),
+            Quiet: true,
+          },
+        })
+      );
+      totalDeleted += objects.length;
+    }
+
+    continuationToken = listResponse.IsTruncated
+      ? listResponse.NextContinuationToken
+      : undefined;
+  } while (continuationToken);
+
+  return totalDeleted;
 };
 
-/**
- * Verifica si el bucket existe y lo crea si no.
- * Configura política de acceso y CORS.
- */
+// ========================================
+// INIT BUCKET
+// ========================================
+
+const buildCorsRules = () => {
+  const allowedOrigins = (process.env.WASABI_CORS_ORIGINS || '*')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  return [
+    {
+      AllowedOrigins: allowedOrigins,
+      AllowedMethods: ['GET', 'HEAD'],
+      AllowedHeaders: ['*'],
+      MaxAgeSeconds: 86400,
+    },
+  ];
+};
+
 const initBucket = async () => {
   try {
     await s3Client.send(new HeadBucketCommand({ Bucket: WASABI_BUCKET }));
@@ -246,24 +295,11 @@ const initBucket = async () => {
     }
   }
 
-  // Intentar configurar acceso público (puede fallar si Block Public Access está habilitado)
-  await ensureBucketPublicPolicy();
-
-  // Configurar CORS
   try {
     await s3Client.send(
       new PutBucketCorsCommand({
         Bucket: WASABI_BUCKET,
-        CORSConfiguration: {
-          CORSRules: [
-            {
-              AllowedOrigins: ['*'],
-              AllowedMethods: ['GET', 'HEAD'],
-              AllowedHeaders: ['*'],
-              MaxAgeSeconds: 86400,
-            },
-          ],
-        },
+        CORSConfiguration: { CORSRules: buildCorsRules() },
       })
     );
     console.log(`   [Wasabi] CORS configurado correctamente`);
@@ -271,33 +307,18 @@ const initBucket = async () => {
     console.warn(`   [Wasabi] CORS no aplicado: ${error.message}`);
   }
 
-  console.log(`   [Wasabi] Presigned URLs activas (expiry: 7 días)`);
-};
-
-/**
- * Convierte una URL de Wasabi almacenada en BD a una URL de proxy del backend.
- * El proxy sirve la imagen directamente sin requerir acceso público al bucket.
- *
- * Wasabi URL: https://s3.us-east-1.wasabisys.com/pichanguitas-uploads/fields-photos/file.jpg
- * Proxy URL:  /api/media/fields-photos/file.jpg
- *
- * @param {string} url - URL de Wasabi almacenada en BD
- * @returns {string} URL de proxy relativa, o la URL original si no es de Wasabi
- */
-const toProxyUrl = (url) => {
-  if (!url) return null;
-  const key = extractKeyFromUrl(url);
-  if (!key) return url;
-  return `/api/media/${key}`;
+  console.log(`   [Wasabi] Objetos privados; acceso vía proxy/endpoint autenticado`);
 };
 
 module.exports = {
   uploadFile,
   deleteFile,
+  deleteFileByUrl,
+  deleteFolder,
   getPublicUrl,
   getPresignedUrl,
-  toAccessibleUrl,
   toProxyUrl,
+  keyToProxyUrl,
   getFileStream,
   extractKeyFromUrl,
   initBucket,

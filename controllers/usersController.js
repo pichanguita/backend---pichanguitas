@@ -13,6 +13,12 @@ const {
   getUsersStats,
 } = require('../models/usersModel');
 const { transformUserToCamelCase } = require('../utils/transformers');
+const {
+  logActivity,
+  resolveIp,
+  ACTIVITY_TYPES,
+  ACTIVITY_STATUS,
+} = require('../services/activityLogsService');
 
 /**
  * Obtener todos los usuarios con filtros
@@ -252,6 +258,23 @@ const updateExistingUser = async (req, res) => {
 
     const updatedUser = await updateUser(id, userData);
 
+    // Registrar actividad si cambió el estado de bloqueo (acción sensible)
+    if (is_blocked !== undefined && is_blocked !== existingUser.is_blocked) {
+      const actorName = req.user?.name || 'un administrador';
+      await logActivity({
+        userId: Number(id),
+        action: is_blocked ? 'user.blocked' : 'user.unblocked',
+        entityType: ACTIVITY_TYPES.SETTINGS,
+        entityId: Number(id),
+        description: is_blocked
+          ? `Acceso bloqueado por ${actorName}`
+          : `Acceso desbloqueado por ${actorName}`,
+        status: is_blocked ? ACTIVITY_STATUS.WARNING : ACTIVITY_STATUS.SUCCESS,
+        ipAddress: resolveIp(req),
+        actorUserId: req.user?.id ?? null,
+      });
+    }
+
     res.json({
       success: true,
       message: 'Usuario actualizado exitosamente',
@@ -310,6 +333,19 @@ const changePassword = async (req, res) => {
     const updated = await updatePassword(id, new_password, user_id_modification);
 
     if (updated) {
+      await logActivity({
+        userId: Number(id),
+        action: 'user.password_changed',
+        entityType: ACTIVITY_TYPES.SETTINGS,
+        entityId: Number(id),
+        description: isOwnPassword
+          ? 'Cambió su contraseña'
+          : `Contraseña modificada por ${req.user?.name || 'un administrador'}`,
+        status: ACTIVITY_STATUS.SUCCESS,
+        ipAddress: resolveIp(req),
+        actorUserId: req.user?.id ?? null,
+      });
+
       res.json({
         success: true,
         message: 'Contraseña actualizada exitosamente',
@@ -560,6 +596,19 @@ const resetPasswordTemporary = async (req, res) => {
     const updated = await updatePassword(id, temporaryPassword, user_id_modification);
 
     if (updated) {
+      // Registrar actividad (password reset por SA)
+      const actorName = req.user?.name || 'un administrador';
+      await logActivity({
+        userId: Number(id),
+        action: 'user.password_reset',
+        entityType: ACTIVITY_TYPES.SETTINGS,
+        entityId: Number(id),
+        description: `Contraseña reseteada por ${actorName}`,
+        status: ACTIVITY_STATUS.WARNING,
+        ipAddress: resolveIp(req),
+        actorUserId: req.user?.id ?? null,
+      });
+
       res.json({
         success: true,
         message: 'Contraseña reseteada exitosamente',

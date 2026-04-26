@@ -14,12 +14,18 @@ model activity_logs {
   entity_type            String    @db.VarChar(50)
   entity_id              Int?
   details                Json?
+  description            String?
+  status                 String    @default("info") @db.VarChar(20)
   ip_address             String?   @db.VarChar(45)
   user_id_registration   Int?
   date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
   user_id_modification   Int?
   date_time_modification DateTime? @db.Timestamptz(6)
   users                  users?    @relation(fields: [user_id], references: [id], onUpdate: NoAction, map: "fk_activity_logs_user")
+
+  @@index([user_id], map: "idx_activity_logs_user_id")
+  @@index([user_id, entity_type], map: "idx_activity_logs_user_entity")
+  @@index([date_time_registration(sort: Desc)], map: "idx_activity_logs_date")
 }
 
 model alerts {
@@ -58,7 +64,6 @@ model badge_tiers {
   icon                   String?   @db.VarChar(255)
   label                  String?   @db.VarChar(100)
   required_value         Int
-  reward_hours           Decimal?  @default(0.00) @db.Decimal(10, 2)
   color                  String?   @db.VarChar(20)
   user_id_registration   Int?
   date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
@@ -74,16 +79,15 @@ model badges {
   name                   String            @unique @db.VarChar(255)
   icon                   String?           @db.VarChar(255)
   description            String?
-  criteria_type          String            @db.VarChar(50)
   is_active              Boolean?          @default(true)
   status                 String?           @default("active") @db.VarChar(20)
   user_id_registration   Int?
   date_time_registration DateTime?         @default(now()) @db.Timestamptz(6)
   user_id_modification   Int?
   date_time_modification DateTime?         @db.Timestamptz(6)
-  criteria_id            Int?
+  criteria_id            Int
   badge_tiers            badge_tiers[]
-  badge_criteria         badge_criteria?   @relation(fields: [criteria_id], references: [id], onUpdate: NoAction, map: "fk_badges_criteria")
+  badge_criteria         badge_criteria    @relation(fields: [criteria_id], references: [id], onUpdate: NoAction, map: "fk_badges_criteria")
   customer_badges        customer_badges[]
 
   @@index([criteria_id], map: "idx_badges_criteria_id")
@@ -206,20 +210,6 @@ model customer_badges {
   @@unique([customer_id, badge_id, tier], map: "uk_customer_badges")
 }
 
-model customer_promotion_history {
-  id                     Int       @id @default(autoincrement())
-  customer_id            Int
-  type                   String    @db.VarChar(20)
-  hours_redeemed         Decimal?  @default(0.00) @db.Decimal(10, 2)
-  hours_earned           Decimal?  @default(0.00) @db.Decimal(10, 2)
-  remaining_hours        Decimal?  @default(0.00) @db.Decimal(10, 2)
-  user_id_registration   Int?
-  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
-  user_id_modification   Int?
-  date_time_modification DateTime? @db.Timestamptz(6)
-  customers              customers @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_customer_promotion_history_customer")
-}
-
 model customers {
   id                                Int                              @id @default(autoincrement())
   user_id                           Int?
@@ -241,11 +231,9 @@ model customers {
   date_time_registration            DateTime?                        @default(now()) @db.Timestamptz(6)
   user_id_modification              Int?
   date_time_modification            DateTime?                        @db.Timestamptz(6)
-  accumulated_hours                 Decimal?                         @default(0.00) @db.Decimal(10, 2)
   alerts                            alerts[]
   coupon_usage                      coupon_usage[]
   customer_badges                   customer_badges[]
-  customer_promotion_history        customer_promotion_history[]
   customer_promotion_redemptions    customer_promotion_redemptions[]
   users_customers_created_byTousers users                            @relation("customers_created_byTousers", fields: [created_by], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_customers_created_by")
   users_customers_user_idTousers    users?                           @relation("customers_user_idTousers", fields: [user_id], references: [id], onUpdate: NoAction, map: "fk_customers_user")
@@ -708,28 +696,70 @@ model refunds {
 }
 
 model registration_requests {
-  id                     Int       @id @default(autoincrement())
-  name                   String    @db.VarChar(255)
-  email                  String    @db.VarChar(255)
-  phone                  String    @db.VarChar(20)
-  dni                    String?   @db.VarChar(8)
-  field_name             String    @db.VarChar(255)
-  address                String
-  department             String    @db.VarChar(100)
-  province               String    @db.VarChar(100)
-  district               String    @db.VarChar(100)
-  documents              Json?
-  status                 String?   @default("pending") @db.VarChar(20)
-  reviewed_by            Int?
-  reviewed_at            DateTime? @db.Timestamptz(6)
-  rejection_reason       String?
-  user_id_registration   Int?
-  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
-  user_id_modification   Int?
-  date_time_modification DateTime? @db.Timestamptz(6)
-  users                  users?    @relation(fields: [reviewed_by], references: [id], onUpdate: NoAction, map: "fk_registration_requests_reviewed_by")
+  id                        Int                            @id @default(autoincrement())
+  name                      String                         @db.VarChar(255)
+  email                     String                         @db.VarChar(255)
+  phone                     String                         @db.VarChar(20)
+  dni                       String?                        @db.VarChar(8)
+  field_name                String                         @db.VarChar(255)
+  address                   String
+  department                String                         @db.VarChar(100)
+  province                  String                         @db.VarChar(100)
+  district                  String                         @db.VarChar(100)
+  business_ruc              String?                        @db.VarChar(20)
+  business_phone            String?                        @db.VarChar(30)
+  business_reference        String?
+  business_latitude         Decimal?                       @db.Decimal(10, 8)
+  business_longitude        Decimal?                       @db.Decimal(11, 8)
+  address_references        String?
+  experience                String?
+  reason_to_join            String?
+  credentials_username      String?                        @db.VarChar(50)
+  credentials_password_enc  String?
+  status                    String?                        @default("pending") @db.VarChar(20)
+  reviewed_by               Int?
+  reviewed_at               DateTime?                      @db.Timestamptz(6)
+  rejection_reason          String?
+  user_id_registration      Int?
+  date_time_registration    DateTime?                      @default(now()) @db.Timestamptz(6)
+  user_id_modification      Int?
+  date_time_modification    DateTime?                      @db.Timestamptz(6)
+  users                     users?                         @relation(fields: [reviewed_by], references: [id], onUpdate: NoAction, map: "fk_registration_requests_reviewed_by")
+  files                     registration_request_files[]
+  sports                    registration_request_sports[]
 
   @@index([date_time_registration], map: "idx_registration_requests_created_at")
+}
+
+model registration_request_files {
+  id                        Int                   @id @default(autoincrement())
+  registration_request_id   Int
+  wasabi_key                String                @unique(map: "uq_registration_request_files_wasabi_key") @db.VarChar(500)
+  original_name             String                @db.VarChar(255)
+  mime_type                 String                @db.VarChar(100)
+  size_bytes                BigInt?
+  kind                      String                @db.VarChar(20)
+  user_id_registration      Int?
+  date_time_registration    DateTime?             @default(now()) @db.Timestamptz(6)
+  user_id_modification      Int?
+  date_time_modification    DateTime?             @db.Timestamptz(6)
+  registration_requests     registration_requests @relation(fields: [registration_request_id], references: [id], onDelete: Cascade, map: "fk_registration_request_files_request")
+
+  @@index([registration_request_id], map: "idx_registration_request_files_request")
+  @@index([registration_request_id, kind], map: "idx_registration_request_files_kind")
+}
+
+model registration_request_sports {
+  id                        Int                   @id @default(autoincrement())
+  registration_request_id   Int
+  sport_type_id             Int
+  user_id_registration      Int?
+  date_time_registration    DateTime?             @default(now()) @db.Timestamptz(6)
+  registration_requests     registration_requests @relation(fields: [registration_request_id], references: [id], onDelete: Cascade, map: "fk_registration_request_sports_request")
+  sport_types               sport_types           @relation(fields: [sport_type_id], references: [id], map: "fk_registration_request_sports_sport_type")
+
+  @@unique([registration_request_id, sport_type_id], map: "uq_registration_request_sports_pair")
+  @@index([registration_request_id], map: "idx_registration_request_sports_request")
 }
 
 model reservation_time_slots {
@@ -895,9 +925,10 @@ model sport_types {
   date_time_registration DateTime?               @default(now()) @db.Timestamptz(6)
   user_id_modification   Int?
   date_time_modification DateTime?               @db.Timestamptz(6)
-  field_sports           field_sports[]
-  fields                 fields[]
-  promotion_rule_sports  promotion_rule_sports[]
+  field_sports                field_sports[]
+  fields                      fields[]
+  promotion_rule_sports       promotion_rule_sports[]
+  registration_request_sports registration_request_sports[]
 }
 
 model time_ranges {
@@ -1036,6 +1067,7 @@ model badge_criteria {
   calculation_field      String    @db.VarChar(100)
   calculation_type       String    @default("count") @db.VarChar(20)
   filter_conditions      Json?
+  unit                   String?   @db.VarChar(50)
   is_active              Boolean?  @default(true)
   user_id_registration   Int?
   date_time_registration DateTime? @default(now()) @db.Timestamptz(6)

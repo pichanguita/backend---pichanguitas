@@ -9,7 +9,6 @@ const {
   updateExistingCustomer,
   updateStats,
   deleteCustomerById,
-  getPromotionHistory,
   getMyClients,
   getMyFreeHours,
 } = require('../controllers/customersController');
@@ -52,10 +51,6 @@ router.get('/by-admin/:adminId', verificarToken, verificarRolesPermitidos, getMy
 
 // GET /api/customers - Obtener todos los clientes (con filtros opcionales)
 router.get('/', verificarToken, verificarRolesPermitidos, getCustomers);
-
-// GET /api/customers/:id/promotions - Obtener historial de promociones de un cliente
-// IMPORTANTE: Esta ruta debe ir ANTES de '/:id' para evitar conflictos
-router.get('/:id/promotions', verificarToken, verificarRolesPermitidos, getPromotionHistory);
 
 // GET /api/customers/:id - Obtener un cliente por ID
 router.get('/:id', verificarToken, verificarRolesPermitidos, getCustomer);

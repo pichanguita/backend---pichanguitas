@@ -5,6 +5,8 @@
  * (snake_case) al formato que espera el frontend (camelCase)
  */
 
+const { toProxyUrl } = require('../services/wasabiService');
+
 /**
  * Convierte una fecha a formato YYYY-MM-DD de manera segura
  * Esto evita problemas de zona horaria al enviar fechas al frontend
@@ -55,9 +57,50 @@ const toDateStringSafe = date => {
  * @returns {string|null} Valor numérico sin unidades, o null
  */
 const stripDimensionUnit = value => {
-  if (value == null) return null;
+  if (value === null || value === undefined) return null;
   const cleaned = value.toString().replace(/\s*(m²|m)\s*$/i, '').trim();
   return cleaned === '' ? null : cleaned;
+};
+
+/**
+ * Convierte un DateTime de Postgres (TIME) a string 'HH:MM:SS' si aplica.
+ * Acepta Date, 'HH:MM:SS', 'HH:MM' y null.
+ * @param {Date|string|null} value
+ * @returns {string|null}
+ */
+const toTimeString = value => {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) {
+    const hh = String(value.getUTCHours()).padStart(2, '0');
+    const mm = String(value.getUTCMinutes()).padStart(2, '0');
+    const ss = String(value.getUTCSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+  const str = String(value).trim();
+  if (!str) return null;
+  return str.length === 5 ? `${str}:00` : str;
+};
+
+/**
+ * Convierte filas snake_case de field_schedules a un objeto camelCase
+ * keyed por día de la semana, consumido por el frontend (bookingHelpers).
+ * Si no hay filas, retorna null (convención: cancha sin horario configurado = abierta).
+ * @param {Array|null|undefined} rows
+ * @returns {Object|null} { monday: { isOpen, openTime, closeTime }, ... } | null
+ */
+const buildScheduleByDay = rows => {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const byDay = {};
+  for (const row of rows) {
+    const day = String(row.day_of_week || '').toLowerCase();
+    if (!day) continue;
+    byDay[day] = {
+      isOpen: row.is_open !== false,
+      openTime: toTimeString(row.open_time),
+      closeTime: toTimeString(row.close_time),
+    };
+  }
+  return Object.keys(byDay).length > 0 ? byDay : null;
 };
 
 /**
@@ -162,6 +205,18 @@ const transformFieldToCamelCase = field => {
     },
     // Precios especiales de la cancha
     specialPricing: field.specialPricing || [],
+    // Horario operativo keyed por día (para validación de reservas y UX cliente).
+    // null ⇒ cancha sin horarios configurados (comportamiento por defecto: abierta)
+    schedule: buildScheduleByDay(field.schedules),
+    // Mantenimientos programados con start/end en formato YYYY-MM-DD.
+    // El frontend los usa para decidir si la cancha está disponible para la
+    // fecha que el cliente quiere reservar (y no solo "hoy").
+    maintenanceSchedules: (field.maintenance_schedules || []).map(m => ({
+      id: m.id,
+      startDate: toDateStringSafe(m.start_date),
+      endDate: toDateStringSafe(m.end_date),
+      reason: m.reason || '',
+    })),
   };
 
   return transformed;
@@ -204,7 +259,7 @@ const transformReservationToCamelCase = reservation => {
     payment_method: reservation.payment_method, // ✅ Mantener snake_case
     paymentStatus: reservation.payment_status,
     payment_status: reservation.payment_status, // ✅ Mantener snake_case
-    paymentVoucherUrl: reservation.payment_voucher_url,
+    paymentVoucherUrl: toProxyUrl(reservation.payment_voucher_url),
     status: reservation.status,
     type: reservation.type,
     hours: parseFloat(reservation.hours) || 1, // ✅ Convertir a número
@@ -286,4 +341,6 @@ module.exports = {
   transformFieldToCamelCase,
   transformReservationToCamelCase,
   transformUserToCamelCase,
+  toTimeString,
+  buildScheduleByDay,
 };

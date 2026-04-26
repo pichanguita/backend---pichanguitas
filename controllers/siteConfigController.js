@@ -1,5 +1,31 @@
 const pool = require('../config/db');
-const { uploadFile, deleteFile, extractKeyFromUrl } = require('../services/wasabiService');
+const {
+  uploadFile,
+  deleteFile,
+  extractKeyFromUrl,
+  toProxyUrl,
+  keyToProxyUrl,
+} = require('../services/wasabiService');
+const { WASABI_FOLDERS, SITE_CONFIG_DEFAULTS } = require('../config/storage');
+
+// Transforma URLs Wasabi almacenadas al formato proxy que consume el FE.
+const transformValueForResponse = value => {
+  if (!value || typeof value !== 'object') return value;
+  if (value.url) {
+    return { ...value, url: toProxyUrl(value.url) };
+  }
+  return value;
+};
+
+// Valores por defecto expuestos al cliente, derivados de Wasabi.
+const buildDefaultValues = () => ({
+  heroBackground: {
+    url: keyToProxyUrl(SITE_CONFIG_DEFAULTS.heroBackground.key),
+    alt: SITE_CONFIG_DEFAULTS.heroBackground.alt,
+    type: SITE_CONFIG_DEFAULTS.heroBackground.type,
+    isDefault: true,
+  },
+});
 
 /**
  * GET /api/site-config
@@ -11,22 +37,15 @@ const getAllSiteConfig = async (req, res) => {
       'SELECT id, key, value, date_time_registration, date_time_modification FROM site_config ORDER BY key'
     );
 
-    // Valores por defecto
-    const defaultValues = {
-      heroBackground: {
-        url: '/uploads/site-images/img_hero_default.jpg',
-        alt: 'Hero Background por defecto',
-        type: 'default',
-        isDefault: true,
-      },
-    };
+    const defaultValues = buildDefaultValues();
 
     // Formatear respuesta
     const config = {};
     result.rows.forEach(row => {
+      const value = transformValueForResponse(row.value) || {};
       config[row.key] = {
         id: row.id,
-        ...row.value,
+        ...value,
         registered: row.date_time_registration,
         modified: row.date_time_modification,
         isDefault: false,
@@ -68,21 +87,13 @@ const getSiteConfigByKey = async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      const defaultValues = {
-        heroBackground: {
-          url: '/uploads/site-images/img_hero_default.jpg',
-          alt: 'Hero Background por defecto',
-          type: 'default',
-        },
-      };
-
+      const defaultValues = buildDefaultValues();
       if (defaultValues[key]) {
         return res.json({
           success: true,
           data: {
             key: key,
             ...defaultValues[key],
-            isDefault: true,
           },
         });
       }
@@ -94,12 +105,13 @@ const getSiteConfigByKey = async (req, res) => {
     }
 
     const row = result.rows[0];
+    const value = transformValueForResponse(row.value) || {};
     res.json({
       success: true,
       data: {
         id: row.id,
         key: row.key,
-        ...row.value,
+        ...value,
         registered: row.date_time_registration,
         modified: row.date_time_modification,
         isDefault: false,
@@ -142,7 +154,7 @@ const uploadSiteImage = async (req, res) => {
       buffer: req.file.buffer,
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
-      folder: 'site-images',
+      folder: WASABI_FOLDERS.SITE_IMAGES,
       customFilename: `${key}_${Date.now()}`,
     });
 
@@ -198,6 +210,7 @@ const uploadSiteImage = async (req, res) => {
     }
 
     const row = dbResult.rows[0];
+    const responseValue = transformValueForResponse(row.value) || {};
     res.json({
       success: true,
       message:
@@ -207,7 +220,7 @@ const uploadSiteImage = async (req, res) => {
       data: {
         id: row.id,
         key: row.key,
-        ...row.value,
+        ...responseValue,
         registered: row.date_time_registration,
         modified: row.date_time_modification,
       },
@@ -284,6 +297,7 @@ const updateSiteConfigByKey = async (req, res) => {
     }
 
     const row = result.rows[0];
+    const responseValue = transformValueForResponse(row.value) || {};
     res.json({
       success: true,
       message:
@@ -293,7 +307,7 @@ const updateSiteConfigByKey = async (req, res) => {
       data: {
         id: row.id,
         key: row.key,
-        ...row.value,
+        ...responseValue,
         registered: row.date_time_registration,
         modified: row.date_time_modification,
       },

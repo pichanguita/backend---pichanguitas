@@ -13,20 +13,18 @@ const {
 
 /**
  * Obtener todas las alertas con filtros
- * SuperAdmin (role_id=1) ve todas, Admin (role_id=2) solo las suyas
+ * Cada usuario (admin o super admin) ve sus propias alertas por defecto.
+ * El super admin puede consultar alertas de otro admin pasando ?admin_id=X.
+ * Nota: Cada super admin ya recibe su propia fila en `alerts` cuando corresponde,
+ * por lo que filtrar por user.id evita duplicados al listar (p. ej. nueva reserva
+ * crea una alerta para el admin de la cancha y otra para cada super admin).
  */
 const getAlerts = async (req, res) => {
   try {
     const user = req.user;
-    const isSuperAdmin = user?.id_rol === 1;
 
     const filters = {
-      // Si es admin, solo ver sus alertas. Si es superadmin, ver todas o filtrar por admin_id si se especifica
-      admin_id: isSuperAdmin
-        ? req.query.admin_id
-          ? parseInt(req.query.admin_id)
-          : null
-        : user?.id,
+      admin_id: req.query.admin_id ? parseInt(req.query.admin_id) : user?.id,
       type: req.query.type,
       status: req.query.status,
       priority: req.query.priority,
@@ -222,15 +220,15 @@ const markMultipleAlertsAsRead = async (req, res) => {
 
 /**
  * Marcar TODAS las alertas como leídas
- * SuperAdmin marca todas, Admin solo las suyas
+ * Cada usuario marca solo sus propias alertas (las que le fueron dirigidas).
+ * El super admin puede marcar las de otro admin pasando ?admin_id=X.
+ * Alineado con getAlerts para mantener consistencia UI/BD.
  */
 const markAllAlertsAsRead = async (req, res) => {
   try {
     const user = req.user;
-    const isSuperAdmin = user?.id_rol === 1;
 
-    // Si es admin, solo marcar las suyas. Si es superadmin, marcar todas
-    const adminId = isSuperAdmin ? null : user?.id;
+    const adminId = req.query.admin_id ? parseInt(req.query.admin_id) : user?.id;
     const user_id = user?.id || 1;
 
     const count = await markAllAsRead(adminId, user_id);

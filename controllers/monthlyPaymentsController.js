@@ -12,7 +12,8 @@ const {
   getAdminCurrentPaymentStatus,
 } = require('../models/monthlyPaymentsModel');
 const pool = require('../config/db');
-const { uploadFile } = require('../services/wasabiService');
+const { uploadFile, deleteFileByUrl, toProxyUrl } = require('../services/wasabiService');
+const { WASABI_FOLDERS } = require('../config/storage');
 
 /**
  * Crear una alerta para notificar eventos de pago
@@ -49,10 +50,14 @@ const getAll = async (req, res) => {
     };
 
     const payments = await getMonthlyPaymentStatus(filters);
+    const paymentsWithProxy = payments.map(p => ({
+      ...p,
+      payment_voucher_url: toProxyUrl(p.payment_voucher_url),
+    }));
 
     res.json({
       success: true,
-      data: payments,
+      data: paymentsWithProxy,
     });
   } catch (error) {
     console.error('Error obteniendo pagos mensuales:', error);
@@ -78,10 +83,14 @@ const getHistory = async (req, res) => {
     if (status) filters.status = status;
 
     const history = await getPaymentHistory(filters);
+    const historyWithProxy = history.map(p => ({
+      ...p,
+      payment_voucher_url: toProxyUrl(p.payment_voucher_url),
+    }));
 
     res.json({
       success: true,
-      data: history,
+      data: historyWithProxy,
     });
   } catch (error) {
     console.error('Error obteniendo historial:', error);
@@ -202,7 +211,7 @@ const report = async (req, res) => {
         buffer: req.file.buffer,
         originalname: req.file.originalname,
         mimetype: req.file.mimetype,
-        folder: `mensualidades/${admin_id}/${field_id}`,
+        folder: `${WASABI_FOLDERS.MONTHLY_VOUCHERS}/${admin_id}/${field_id}`,
         customFilename: `voucher_${year}_${month}_${Date.now()}`,
       });
       payment_voucher_url = result.url;
@@ -310,6 +319,11 @@ const reject = async (req, res) => {
 
     const payment = await rejectPayment(id, userId, reason);
 
+    // Limpieza: el voucher del reporte rechazado queda obsoleto
+    if (payment?.previous_payment_voucher_url) {
+      await deleteFileByUrl(payment.previous_payment_voucher_url);
+    }
+
     // Notificar al admin de cancha
     await createPaymentAlert(
       'payment_rejected',
@@ -349,6 +363,11 @@ const remove = async (req, res) => {
         success: false,
         error: 'Pago no encontrado',
       });
+    }
+
+    // Limpieza: eliminar voucher en Wasabi
+    if (deleted.payment_voucher_url) {
+      await deleteFileByUrl(deleted.payment_voucher_url);
     }
 
     res.json({
@@ -408,7 +427,7 @@ const getOne = async (req, res) => {
 
     res.json({
       success: true,
-      data: payment,
+      data: { ...payment, payment_voucher_url: toProxyUrl(payment.payment_voucher_url) },
     });
   } catch (error) {
     console.error('Error obteniendo pago:', error);
@@ -436,9 +455,16 @@ const getMyStatus = async (req, res) => {
 
     const status = await getAdminCurrentPaymentStatus(adminId);
 
+    const applyProxy = p => (p ? { ...p, payment_voucher_url: toProxyUrl(p.payment_voucher_url) } : p);
+    const normalized = Array.isArray(status)
+      ? status.map(applyProxy)
+      : status && typeof status === 'object'
+        ? applyProxy(status)
+        : status;
+
     res.json({
       success: true,
-      data: status,
+      data: normalized,
     });
   } catch (error) {
     console.error('Error obteniendo estado de pago:', error);

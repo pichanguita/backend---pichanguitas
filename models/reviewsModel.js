@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { checkAndAssignBadges } = require('../services/badgeAssignmentService');
 
 /**
  * Obtener todas las reseñas con filtros
@@ -181,7 +182,23 @@ const createReview = async reviewData => {
     user_id_registration,
   ]);
 
-  return result.rows[0];
+  const newReview = result.rows[0];
+
+  // Verificar y asignar insignias automáticamente (criterio total_reviews)
+  if (customer_id && is_visible && status === 'active') {
+    try {
+      const newBadges = await checkAndAssignBadges(customer_id, user_id_registration || 1);
+      if (newBadges.length > 0) {
+        console.log(
+          `🏆 ${newBadges.length} insignia(s) nueva(s) asignada(s) al cliente ${customer_id} tras reseña`
+        );
+      }
+    } catch (badgeError) {
+      console.error('Error asignando insignias tras reseña:', badgeError);
+    }
+  }
+
+  return newReview;
 };
 
 /**

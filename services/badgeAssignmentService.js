@@ -2,6 +2,23 @@ const pool = require('../config/db');
 const { calculateCriteriaValue } = require('../models/badgeCriteriaModel');
 
 /**
+ * Verificar si el sistema de gamificación admite asignación automática
+ * Lee gamification_config: requiere is_active='true' y auto_assign='true'
+ * @returns {Promise<boolean>}
+ */
+const isAutoAssignEnabled = async () => {
+  const result = await pool.query(
+    `SELECT config_key, config_value FROM gamification_config
+     WHERE config_key IN ('is_active', 'auto_assign')`
+  );
+  const flags = result.rows.reduce((acc, row) => {
+    acc[row.config_key] = row.config_value === 'true';
+    return acc;
+  }, {});
+  return flags.is_active !== false && flags.auto_assign !== false;
+};
+
+/**
  * Verificar y asignar insignias automáticamente a un cliente
  * @param {number} customerId - ID del cliente
  * @param {number} userId - ID del usuario que ejecuta (para auditoría)
@@ -11,6 +28,15 @@ const checkAndAssignBadges = async (customerId, userId = 1) => {
   const newlyAssigned = [];
 
   try {
+    // 0. Si el sistema está pausado o auto_assign desactivado, no hacer nada
+    const enabled = await isAutoAssignEnabled();
+    if (!enabled) {
+      console.log(
+        `⏸️  Sistema de gamificación pausado: no se asignarán insignias al cliente ${customerId}`
+      );
+      return newlyAssigned;
+    }
+
     // 1. Obtener todas las insignias activas con sus criterios y tiers
     const badgesQuery = `
       SELECT
@@ -28,7 +54,6 @@ const checkAndAssignBadges = async (customerId, userId = 1) => {
         bt.label as tier_label,
         bt.icon as tier_icon,
         bt.required_value,
-        bt.reward_hours,
         bt.color as tier_color
       FROM badges b
       INNER JOIN badge_criteria bc ON b.criteria_id = bc.id
@@ -82,7 +107,6 @@ const checkAndAssignBadges = async (customerId, userId = 1) => {
         tier_label: row.tier_label,
         tier_icon: row.tier_icon,
         required_value: parseFloat(row.required_value),
-        reward_hours: parseFloat(row.reward_hours || 0),
         tier_color: row.tier_color,
       });
     }
@@ -117,35 +141,20 @@ const checkAndAssignBadges = async (customerId, userId = 1) => {
 
           if (insertResult.rows.length > 0) {
             newlyAssigned.push({
-              badge_id: badge.badge_id,
-              badge_name: badge.badge_name,
-              badge_icon: badge.badge_icon,
+              badgeId: badge.badge_id,
+              badgeName: badge.badge_name,
+              badgeIcon: badge.badge_icon,
               tier: tier.tier,
-              tier_label: tier.tier_label,
-              tier_icon: tier.tier_icon,
-              tier_color: tier.tier_color,
-              reward_hours: tier.reward_hours,
-              unlocked_at: insertResult.rows[0].unlocked_at,
+              tierLabel: tier.tier_label,
+              tierIcon: tier.tier_icon,
+              tierColor: tier.tier_color,
+              unlockedAt: insertResult.rows[0].unlocked_at,
+              autoAssigned: true,
             });
 
             console.log(
               `🏆 Insignia asignada: ${badge.badge_name} (${tier.tier_label}) a cliente ${customerId}`
             );
-
-            // Si tiene horas de recompensa, sumarlas al cliente
-            if (tier.reward_hours > 0) {
-              await pool.query(
-                `
-                UPDATE customers
-                SET earned_free_hours = COALESCE(earned_free_hours, 0) + $1,
-                    available_free_hours = COALESCE(available_free_hours, 0) + $1
-                WHERE id = $2
-              `,
-                [tier.reward_hours, customerId]
-              );
-
-              console.log(`  ➕ ${tier.reward_hours}h gratis agregadas al cliente`);
-            }
           }
         }
       }

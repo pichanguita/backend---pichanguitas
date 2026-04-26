@@ -4,6 +4,7 @@ const {
   createSportType,
   updateSportType,
   deleteSportType,
+  countFieldsBySportType,
   sportTypeNameExists,
 } = require('../models/sportTypesModel');
 
@@ -12,7 +13,11 @@ const {
  */
 const getSportTypes = async (req, res) => {
   try {
-    const onlyActive = req.query.only_active === 'true';
+    // Por defecto se excluyen los soft-deleted (is_active=false / status='inactive').
+    // Para obtener también inactivos, pasar ?include_inactive=true.
+    // Se mantiene retrocompatibilidad con ?only_active=true (comportamiento idéntico al default actual).
+    const includeInactive = req.query.include_inactive === 'true';
+    const onlyActive = !includeInactive;
     const sportTypes = await getAllSportTypes(onlyActive);
 
     res.json({
@@ -200,10 +205,42 @@ const deleteSportTypeById = async (req, res) => {
   }
 };
 
+/**
+ * Obtener la cantidad de canchas asociadas a un tipo de deporte.
+ * Se usa para mostrar un mensaje informativo antes de eliminar un deporte.
+ */
+const getSportTypeFieldsCount = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existingSportType = await getSportTypeById(id);
+    if (!existingSportType) {
+      return res.status(404).json({
+        success: false,
+        error: 'Tipo de deporte no encontrado',
+      });
+    }
+
+    const count = await countFieldsBySportType(id);
+
+    res.json({
+      success: true,
+      data: { sportTypeId: Number(id), count },
+    });
+  } catch (error) {
+    console.error('Error al obtener conteo de canchas por deporte:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error al obtener conteo de canchas por deporte',
+    });
+  }
+};
+
 module.exports = {
   getSportTypes,
   getSportType,
   createNewSportType,
   updateExistingSportType,
   deleteSportTypeById,
+  getSportTypeFieldsCount,
 };

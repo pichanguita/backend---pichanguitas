@@ -161,6 +161,26 @@ const deleteSportType = async (id, user_id_modification) => {
 };
 
 /**
+ * Contar canchas únicas asociadas a un tipo de deporte.
+ * Considera ambas fuentes de vínculo: fields.sport_type y field_sports.sport_id.
+ * Excluye canchas lógicamente eliminadas (status='deleted').
+ * @param {number} sportTypeId - ID del tipo de deporte
+ * @returns {Promise<number>} Cantidad de canchas
+ */
+const countFieldsBySportType = async sportTypeId => {
+  const query = `
+    SELECT COUNT(DISTINCT f.id)::int AS count
+    FROM fields f
+    LEFT JOIN field_sports fs ON fs.field_id = f.id
+    WHERE (f.sport_type = $1 OR fs.sport_id = $1)
+      AND f.status != 'deleted'
+  `;
+
+  const result = await pool.query(query, [sportTypeId]);
+  return result.rows[0]?.count || 0;
+};
+
+/**
  * Verificar si un nombre de deporte ya existe
  * @param {string} name - Nombre del deporte
  * @param {number|null} excludeId - ID a excluir de la búsqueda (para updates)
@@ -185,5 +205,6 @@ module.exports = {
   createSportType,
   updateSportType,
   deleteSportType,
+  countFieldsBySportType,
   sportTypeNameExists,
 };

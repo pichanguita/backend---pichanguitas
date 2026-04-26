@@ -10,14 +10,13 @@ const {
   approveRequest,
   rejectRequest,
   deleteRegistrationRequestById,
+  downloadRequestFile,
   getStats,
 } = require('../controllers/registrationRequestsController');
-// Importar middleware de autenticación
 const verificarToken = require('../middleware/authMiddleware');
-// Importar middleware de upload
 const { uploadRegistrationFiles } = require('../middleware/uploadMiddleware');
 
-// Middleware para validar los roles permitidos
+// Roles permitidos para gestionar solicitudes (SA / admin / staff autorizado)
 const verificarRolesPermitidos = (req, res, next) => {
   const rol = req.user?.id_rol;
   if (![1, 2, 3].includes(rol)) {
@@ -26,31 +25,39 @@ const verificarRolesPermitidos = (req, res, next) => {
   next();
 };
 
-// GET /api/registration-requests - Obtener todas las solicitudes (con filtros opcionales)
+// GET /api/registration-requests - Listado con filtros
 router.get('/', verificarToken, verificarRolesPermitidos, getRegistrationRequests);
 
-// GET /api/registration-requests/stats - Obtener estadísticas de solicitudes
+// GET /api/registration-requests/stats - Estadísticas
 router.get('/stats', verificarToken, verificarRolesPermitidos, getStats);
 
-// GET /api/registration-requests/:id - Obtener una solicitud por ID
+// GET /api/registration-requests/:id - Detalle por ID
 router.get('/:id', verificarToken, verificarRolesPermitidos, getRegistrationRequest);
 
-// POST /api/registration-requests/with-files - Crear solicitud CON archivos (multipart/form-data)
+// GET /api/registration-requests/:id/files/:fileId/download - Descarga/preview autenticada
+router.get(
+  '/:id/files/:fileId/download',
+  verificarToken,
+  verificarRolesPermitidos,
+  downloadRequestFile
+);
+
+// POST /api/registration-requests/with-files - Crear con archivos (público)
 router.post('/with-files', uploadRegistrationFiles.any(), createNewRegistrationRequestWithFiles);
 
-// POST /api/registration-requests - Crear una nueva solicitud SIN archivos (JSON puro)
+// POST /api/registration-requests - Crear sin archivos (público)
 router.post('/', createNewRegistrationRequest);
 
-// PUT /api/registration-requests/:id - Actualizar una solicitud
+// PUT /api/registration-requests/:id - Actualizar
 router.put('/:id', verificarToken, verificarRolesPermitidos, updateExistingRegistrationRequest);
 
-// PUT /api/registration-requests/:id/approve - Aprobar una solicitud
+// PUT /api/registration-requests/:id/approve - Aprobar
 router.put('/:id/approve', verificarToken, verificarRolesPermitidos, approveRequest);
 
-// PUT /api/registration-requests/:id/reject - Rechazar una solicitud
+// PUT /api/registration-requests/:id/reject - Rechazar
 router.put('/:id/reject', verificarToken, verificarRolesPermitidos, rejectRequest);
 
-// DELETE /api/registration-requests/:id - Eliminar una solicitud
+// DELETE /api/registration-requests/:id - Eliminar (borra archivos en Wasabi)
 router.delete('/:id', verificarToken, verificarRolesPermitidos, deleteRegistrationRequestById);
 
 module.exports = router;

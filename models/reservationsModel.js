@@ -1,5 +1,12 @@
 const pool = require('../config/db');
 const { checkAndAssignBadges } = require('../services/badgeAssignmentService');
+const { autoRedeemEligiblePromotions } = require('./promotionRulesModel');
+const promotionLogger = require('../services/promotionLogger');
+const {
+  RESERVATION_STATUS,
+  PAYMENT_STATUS,
+  NON_BILLABLE_RESERVATION_STATUSES,
+} = require('../utils/reservationStatuses');
 
 /**
  * Obtener todas las reservas con filtros
@@ -239,52 +246,68 @@ const createReservation = async reservationData => {
 
   const client = await pool.connect();
 
-  // Variables para las horas gratis realmente usadas (pueden ajustarse)
-  let actualFreeHoursUsed = free_hours_used;
-  let actualFreeHoursDiscount = free_hours_discount;
+  // Las horas gratis efectivamente aplicadas se determinan dentro de la
+  // transacción con un SELECT ... FOR UPDATE para evitar race conditions
+  // entre múltiples reservas concurrentes del mismo cliente.
+  const requestedFreeHours = parseFloat(free_hours_used) || 0;
+  const requestedFreeHoursDiscount = parseFloat(free_hours_discount) || 0;
+  let actualFreeHoursUsed = requestedFreeHours;
+  let actualFreeHoursDiscount = requestedFreeHoursDiscount;
 
   try {
     await client.query('BEGIN');
 
-    // Si se intentan usar horas gratis, verificar disponibilidad del cliente
-    if (free_hours_used > 0 && customer_id) {
-      const customerResult = await client.query(
-        'SELECT available_free_hours FROM customers WHERE id = $1',
+    if (requestedFreeHours > 0 && customer_id) {
+      // Lock pesimista del cliente para descuento atómico
+      const lockRes = await client.query(
+        `SELECT available_free_hours
+         FROM customers
+         WHERE id = $1
+         FOR UPDATE`,
         [customer_id]
       );
 
       const availableHours =
-        customerResult.rows.length > 0
-          ? parseFloat(customerResult.rows[0].available_free_hours) || 0
+        lockRes.rows.length > 0
+          ? parseFloat(lockRes.rows[0].available_free_hours) || 0
           : 0;
 
-      // Si el cliente no tiene suficientes horas, ajustar al máximo disponible
-      if (free_hours_used > availableHours) {
-        console.log(
-          `⚠️ Cliente ${customer_id} tiene ${availableHours} horas gratis, se solicitaron ${free_hours_used}. Ajustando...`
+      // Falla explícita: el saldo cambió entre la cotización del frontend y el
+      // commit. El controller validó el precio con N horas; si solo hay M < N,
+      // el total_price persistido sería inconsistente. Mejor abortar y que el
+      // cliente recargue.
+      if (requestedFreeHours > availableHours) {
+        promotionLogger.validationFailed({
+          customerId: customer_id,
+          reason: 'insufficient_free_hours',
+          requested: requestedFreeHours,
+          available: availableHours,
+        });
+        const err = new Error(
+          `Saldo de horas gratis insuficiente: solicitadas ${requestedFreeHours}, disponibles ${availableHours.toFixed(1)}. Recarga la página e intenta nuevamente.`
         );
-        actualFreeHoursUsed = availableHours;
-        // Recalcular el descuento proporcionalmente
-        if (free_hours_used > 0) {
-          actualFreeHoursDiscount = (free_hours_discount / free_hours_used) * actualFreeHoursUsed;
-        } else {
-          actualFreeHoursDiscount = 0;
-        }
+        err.code = 'INSUFFICIENT_FREE_HOURS';
+        throw err;
       }
 
-      // Solo descontar si hay horas que usar
-      if (actualFreeHoursUsed > 0) {
-        await client.query(
-          `UPDATE customers
-           SET used_free_hours = COALESCE(used_free_hours, 0) + $1,
-               available_free_hours = COALESCE(available_free_hours, 0) - $1
-           WHERE id = $2`,
-          [actualFreeHoursUsed, customer_id]
-        );
-        console.log(
-          `✅ Descontadas ${actualFreeHoursUsed} horas gratis del cliente ${customer_id}`
-        );
-      }
+      actualFreeHoursUsed = requestedFreeHours;
+      actualFreeHoursDiscount = requestedFreeHoursDiscount;
+
+      await client.query(
+        `UPDATE customers
+         SET used_free_hours = COALESCE(used_free_hours, 0) + $1,
+             available_free_hours = COALESCE(available_free_hours, 0) - $1
+         WHERE id = $2`,
+        [actualFreeHoursUsed, customer_id]
+      );
+
+      promotionLogger.freeHoursDiscount({
+        customerId: customer_id,
+        reservationId: null,
+        requested: requestedFreeHours,
+        applied: actualFreeHoursUsed,
+        available: availableHours,
+      });
     }
 
     const query = `
@@ -493,10 +516,15 @@ const updateReservation = async (id, reservationData) => {
 };
 
 /**
- * Cancelar una reserva
+ * Cancelar una reserva.
+ * Idempotente: si la reserva ya está cancelada, no reembolsa horas dos veces.
+ * Restituye `available_free_hours` y disminuye `used_free_hours` cuando la
+ * reserva consumió horas gratis (free_hours_used > 0). Todo dentro de una
+ * transacción para evitar inconsistencias.
+ *
  * @param {number} id - ID de la reserva
- * @param {Object} cancellationData - Datos de la cancelación
- * @returns {Promise<Object|null>} Reserva cancelada o null
+ * @param {Object} cancellationData
+ * @returns {Promise<Object|null>}
  */
 const cancelReservation = async (id, cancellationData) => {
   const {
@@ -507,30 +535,79 @@ const cancelReservation = async (id, cancellationData) => {
     user_id_modification,
   } = cancellationData;
 
-  const query = `
-    UPDATE reservations
-    SET status = 'cancelled',
-        cancelled_by = $1,
-        cancellation_reason = $2,
-        advance_kept = $3,
-        lost_revenue = $4,
-        cancelled_at = CURRENT_TIMESTAMP,
-        user_id_modification = $5,
-        date_time_modification = CURRENT_TIMESTAMP
-    WHERE id = $6
-    RETURNING *
-  `;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  const result = await pool.query(query, [
-    cancelled_by,
-    cancellation_reason,
-    advance_kept,
-    lost_revenue,
-    user_id_modification,
-    id,
-  ]);
+    // 1. Leer la reserva con bloqueo para evitar doble cancelación concurrente
+    const lockRes = await client.query(
+      `SELECT id, customer_id, status, free_hours_used
+       FROM reservations
+       WHERE id = $1
+       FOR UPDATE`,
+      [id]
+    );
 
-  return result.rows.length > 0 ? result.rows[0] : null;
+    if (lockRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    const previous = lockRes.rows[0];
+    const alreadyCancelled = previous.status === RESERVATION_STATUS.CANCELLED;
+
+    // 2. Cancelar
+    const updateRes = await client.query(
+      `UPDATE reservations
+       SET status = $1,
+           cancelled_by = $2,
+           cancellation_reason = $3,
+           advance_kept = $4,
+           lost_revenue = $5,
+           cancelled_at = CURRENT_TIMESTAMP,
+           user_id_modification = $6,
+           date_time_modification = CURRENT_TIMESTAMP
+       WHERE id = $7
+       RETURNING *`,
+      [
+        RESERVATION_STATUS.CANCELLED,
+        cancelled_by,
+        cancellation_reason,
+        advance_kept,
+        lost_revenue,
+        user_id_modification,
+        id,
+      ]
+    );
+
+    const cancelled = updateRes.rows[0] || null;
+
+    // 3. Restituir horas gratis SOLO si no estaba cancelada y consumió horas
+    const freeHoursUsed = parseFloat(previous.free_hours_used) || 0;
+    if (!alreadyCancelled && freeHoursUsed > 0 && previous.customer_id) {
+      await client.query(
+        `UPDATE customers
+         SET available_free_hours = COALESCE(available_free_hours, 0) + $1,
+             used_free_hours = GREATEST(COALESCE(used_free_hours, 0) - $1, 0)
+         WHERE id = $2`,
+        [freeHoursUsed, previous.customer_id]
+      );
+
+      promotionLogger.freeHoursRefund({
+        customerId: previous.customer_id,
+        reservationId: previous.id,
+        restoredHours: freeHoursUsed,
+      });
+    }
+
+    await client.query('COMMIT');
+    return cancelled;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 /**
@@ -540,51 +617,73 @@ const cancelReservation = async (id, cancellationData) => {
  * @returns {Promise<Object|null>} Reserva completada o null
  */
 const completeReservation = async (id, user_id_modification) => {
-  // 1. Completar la reserva
-  const query = `
-    UPDATE reservations
-    SET status = 'completed',
-        payment_status = 'fully_paid',
-        advance_payment = total_price,
-        remaining_payment = 0,
-        completed_at = CURRENT_TIMESTAMP,
-        user_id_modification = $1,
-        date_time_modification = CURRENT_TIMESTAMP
-    WHERE id = $2
-    RETURNING *
-  `;
+  const client = await pool.connect();
+  let completedReservation = null;
+  let autoRedemptions = [];
 
-  const result = await pool.query(query, [user_id_modification, id]);
-  const completedReservation = result.rows.length > 0 ? result.rows[0] : null;
+  try {
+    await client.query('BEGIN');
 
+    // 1. Completar la reserva
+    const updateRes = await client.query(
+      `UPDATE reservations
+       SET status = $1,
+           payment_status = $2,
+           advance_payment = total_price,
+           remaining_payment = 0,
+           completed_at = CURRENT_TIMESTAMP,
+           user_id_modification = $3,
+           date_time_modification = CURRENT_TIMESTAMP
+       WHERE id = $4
+       RETURNING *`,
+      [RESERVATION_STATUS.COMPLETED, PAYMENT_STATUS.FULLY_PAID, user_id_modification, id]
+    );
+    completedReservation = updateRes.rows[0] || null;
+
+    if (completedReservation && completedReservation.customer_id) {
+      // 2. Actualizar stats del cliente
+      const hoursToAdd = parseFloat(completedReservation.hours) || 1;
+      const amountSpent = parseFloat(completedReservation.total_price) || 0;
+
+      await client.query(
+        `UPDATE customers
+         SET total_hours = COALESCE(total_hours, 0) + $1,
+             total_reservations = COALESCE(total_reservations, 0) + 1,
+             total_spent = COALESCE(total_spent, 0) + $4,
+             user_id_modification = $2,
+             date_time_modification = CURRENT_TIMESTAMP
+         WHERE id = $3`,
+        [hoursToAdd, user_id_modification, completedReservation.customer_id, amountSpent]
+      );
+
+      // 3. Canje automático de promociones que el cliente ya cumplió.
+      //    Idempotente: usa el conteo de canjes previos vs horas jugadas reales.
+      try {
+        autoRedemptions = await autoRedeemEligiblePromotions({
+          client,
+          customerId: completedReservation.customer_id,
+          triggerReservationId: completedReservation.id,
+          userId: user_id_modification,
+        });
+      } catch (autoErr) {
+        promotionLogger.error(
+          'auto_redeem_failed',
+          { customerId: completedReservation.customer_id, reservationId: completedReservation.id },
+          autoErr
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  // 4. Asignación de badges (fuera de la transacción para no bloquear si falla)
   if (completedReservation && completedReservation.customer_id) {
-    // 2. Actualizar stats del cliente: total_hours, total_reservations, total_spent
-    const hoursToAdd = parseFloat(completedReservation.hours) || 1;
-    const amountSpent = parseFloat(completedReservation.total_price) || 0;
-
-    const updateCustomerQuery = `
-      UPDATE customers
-      SET total_hours = COALESCE(total_hours, 0) + $1,
-          accumulated_hours = COALESCE(accumulated_hours, 0) + $1,
-          total_reservations = COALESCE(total_reservations, 0) + 1,
-          total_spent = COALESCE(total_spent, 0) + $4,
-          user_id_modification = $2,
-          date_time_modification = CURRENT_TIMESTAMP
-      WHERE id = $3
-      RETURNING total_hours, accumulated_hours, total_reservations, total_spent
-    `;
-
-    await pool.query(updateCustomerQuery, [
-      hoursToAdd,
-      user_id_modification,
-      completedReservation.customer_id,
-      amountSpent,
-    ]);
-
-    // Nota: Las horas gratis ahora se obtienen manualmente canjeando promociones
-    // El cliente acumula horas en accumulated_hours y cuando canjea se resetea a 0
-
-    // 3. Verificar y asignar insignias automáticamente
     try {
       const newBadges = await checkAndAssignBadges(
         completedReservation.customer_id,
@@ -596,9 +695,13 @@ const completeReservation = async (id, user_id_modification) => {
         );
       }
     } catch (badgeError) {
-      // No fallar la operación principal si hay error en insignias
       console.error('Error asignando insignias:', badgeError);
     }
+  }
+
+  // Adjuntar canjes automáticos al resultado para que el caller pueda informar
+  if (completedReservation) {
+    completedReservation.auto_redemptions = autoRedemptions;
   }
 
   return completedReservation;

@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { weekDayOrderSql } = require('../utils/fieldSchedule');
 
 /**
  * Obtener todos los horarios de canchas con filtros
@@ -48,17 +49,7 @@ const getAllFieldSchedules = async (filters = {}) => {
     paramCount++;
   }
 
-  query += ` ORDER BY fs.field_id,
-    CASE fs.day_of_week
-      WHEN 'monday' THEN 1
-      WHEN 'tuesday' THEN 2
-      WHEN 'wednesday' THEN 3
-      WHEN 'thursday' THEN 4
-      WHEN 'friday' THEN 5
-      WHEN 'saturday' THEN 6
-      WHEN 'sunday' THEN 7
-    END
-  `;
+  query += ` ORDER BY fs.field_id, ${weekDayOrderSql('fs.day_of_week')}`;
 
   const result = await pool.query(query, params);
   return result.rows;
@@ -103,16 +94,7 @@ const getSchedulesByFieldId = async field_id => {
       date_time_modification
     FROM field_schedules
     WHERE field_id = $1
-    ORDER BY
-      CASE day_of_week
-        WHEN 'monday' THEN 1
-        WHEN 'tuesday' THEN 2
-        WHEN 'wednesday' THEN 3
-        WHEN 'thursday' THEN 4
-        WHEN 'friday' THEN 5
-        WHEN 'saturday' THEN 6
-        WHEN 'sunday' THEN 7
-      END
+    ORDER BY ${weekDayOrderSql()}
   `;
 
   const result = await pool.query(query, [field_id]);

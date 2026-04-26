@@ -312,31 +312,6 @@ const phoneNumberExists = async (phoneNumber, excludeId = null) => {
 };
 
 /**
- * Obtener historial de promociones de un cliente
- * @param {number} customerId - ID del cliente
- * @returns {Promise<Array>} Historial de promociones
- */
-const getCustomerPromotionHistory = async customerId => {
-  const query = `
-    SELECT
-      id,
-      customer_id,
-      type,
-      hours_redeemed,
-      hours_earned,
-      remaining_hours,
-      user_id_registration,
-      date_time_registration
-    FROM customer_promotion_history
-    WHERE customer_id = $1
-    ORDER BY date_time_registration DESC
-  `;
-
-  const result = await pool.query(query, [customerId]);
-  return result.rows;
-};
-
-/**
  * Obtener clientes que han hecho reservas en las canchas de un admin
  * O que fueron creados directamente por el admin
  * @param {number} adminId - ID del administrador
@@ -434,7 +409,6 @@ module.exports = {
   updateCustomerStats,
   deleteCustomer,
   phoneNumberExists,
-  getCustomerPromotionHistory,
   getCustomersByFieldAdmin,
   getAllCustomersWithStats,
 };

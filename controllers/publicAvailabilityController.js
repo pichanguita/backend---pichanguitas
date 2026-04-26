@@ -9,6 +9,8 @@
 
 const { getOccupiedSlotsByFieldAndDate } = require('../models/reservationsModel');
 const { getFieldById } = require('../models/fieldsModel');
+const { findScheduleRowForDate, getDayOfWeekKey } = require('../utils/fieldSchedule');
+const { toTimeString } = require('../utils/transformers');
 
 /**
  * Obtener slots ocupados de una cancha para una fecha específica
@@ -73,6 +75,19 @@ const getFieldAvailability = async (req, res) => {
       endTime: slot.end_time,
     }));
 
+    // Horario operativo de la cancha para el día solicitado.
+    // Si la cancha no tiene configuración para ese día → null ⇒ frontend trata como "abierta".
+    const dayKey = getDayOfWeekKey(date);
+    const scheduleRow = findScheduleRowForDate(field.schedules, date);
+    const daySchedule = scheduleRow
+      ? {
+          dayOfWeek: dayKey,
+          isOpen: scheduleRow.is_open !== false,
+          openTime: toTimeString(scheduleRow.open_time),
+          closeTime: toTimeString(scheduleRow.close_time),
+        }
+      : null;
+
     res.json({
       success: true,
       data: {
@@ -80,6 +95,7 @@ const getFieldAvailability = async (req, res) => {
         date: date,
         occupiedSlots: formattedSlots,
         totalOccupied: formattedSlots.length,
+        daySchedule,
       },
     });
   } catch (error) {

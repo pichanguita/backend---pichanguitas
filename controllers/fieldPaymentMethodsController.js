@@ -5,7 +5,31 @@
 
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
-const { uploadFile, deleteFile, extractKeyFromUrl } = require('../services/wasabiService');
+const {
+  uploadFile,
+  deleteFile,
+  deleteFileByUrl,
+  extractKeyFromUrl,
+  getPublicUrl,
+  toProxyUrl,
+} = require('../services/wasabiService');
+const { WASABI_FOLDERS } = require('../config/storage');
+const {
+  logActivity,
+  resolveIp,
+  ACTIVITY_TYPES,
+  ACTIVITY_STATUS,
+} = require('../services/activityLogsService');
+
+/**
+ * Normaliza cualquier URL (proxy /api/media/... o Wasabi directa)
+ * al formato canónico Wasabi que se almacena en BD.
+ */
+const normalizeQrUrl = url => {
+  if (!url) return url;
+  const key = extractKeyFromUrl(url);
+  return key ? getPublicUrl(key) : url;
+};
 
 /**
  * Verificar si el usuario tiene permisos para gestionar una cancha
@@ -56,10 +80,15 @@ const getFieldPaymentMethods = async (req, res) => {
       },
     });
 
+    const methodsWithProxy = methods.map(m => ({
+      ...m,
+      qr_image_url: toProxyUrl(m.qr_image_url),
+    }));
+
     res.json({
       success: true,
-      data: methods,
-      count: methods.length,
+      data: methodsWithProxy,
+      count: methodsWithProxy.length,
     });
   } catch (error) {
     console.error('Error obteniendo métodos de pago:', error);
@@ -115,9 +144,17 @@ const getAdminFieldsPaymentMethods = async (req, res) => {
       },
     });
 
+    const fieldsWithProxy = fields.map(f => ({
+      ...f,
+      field_payment_methods: f.field_payment_methods.map(m => ({
+        ...m,
+        qr_image_url: toProxyUrl(m.qr_image_url),
+      })),
+    }));
+
     res.json({
       success: true,
-      data: fields,
+      data: fieldsWithProxy,
     });
   } catch (error) {
     console.error('Error obteniendo métodos de pago del admin:', error);
@@ -167,6 +204,8 @@ const upsertFieldPaymentMethod = async (req, res) => {
       });
     }
 
+    const normalizedQrUrl = normalizeQrUrl(qr_image_url);
+
     // Upsert: crear o actualizar
     const method = await prisma.field_payment_methods.upsert({
       where: {
@@ -180,7 +219,7 @@ const upsertFieldPaymentMethod = async (req, res) => {
         account_number,
         account_holder,
         phone_number,
-        qr_image_url,
+        qr_image_url: normalizedQrUrl,
         bank_name,
         cci_number,
         instructions,
@@ -195,7 +234,7 @@ const upsertFieldPaymentMethod = async (req, res) => {
         account_number,
         account_holder,
         phone_number,
-        qr_image_url,
+        qr_image_url: normalizedQrUrl,
         bank_name,
         cci_number,
         instructions,
@@ -207,7 +246,7 @@ const upsertFieldPaymentMethod = async (req, res) => {
     res.json({
       success: true,
       message: 'Método de pago guardado correctamente',
-      data: method,
+      data: { ...method, qr_image_url: toProxyUrl(method.qr_image_url) },
     });
   } catch (error) {
     console.error('Error guardando método de pago:', error);
@@ -248,6 +287,7 @@ const updateFieldPaymentMethods = async (req, res) => {
     // Procesar cada método
     const results = [];
     for (const method of methods) {
+      const normalizedQrUrl = normalizeQrUrl(method.qr_image_url);
       const result = await prisma.field_payment_methods.upsert({
         where: {
           field_id_method_type: {
@@ -260,7 +300,7 @@ const updateFieldPaymentMethods = async (req, res) => {
           account_number: method.account_number,
           account_holder: method.account_holder,
           phone_number: method.phone_number,
-          qr_image_url: method.qr_image_url,
+          qr_image_url: normalizedQrUrl,
           bank_name: method.bank_name,
           cci_number: method.cci_number,
           instructions: method.instructions,
@@ -275,7 +315,7 @@ const updateFieldPaymentMethods = async (req, res) => {
           account_number: method.account_number,
           account_holder: method.account_holder,
           phone_number: method.phone_number,
-          qr_image_url: method.qr_image_url,
+          qr_image_url: normalizedQrUrl,
           bank_name: method.bank_name,
           cci_number: method.cci_number,
           instructions: method.instructions,
@@ -289,7 +329,7 @@ const updateFieldPaymentMethods = async (req, res) => {
     res.json({
       success: true,
       message: 'Métodos de pago actualizados correctamente',
-      data: results,
+      data: results.map(r => ({ ...r, qr_image_url: toProxyUrl(r.qr_image_url) })),
     });
   } catch (error) {
     console.error('Error actualizando métodos de pago:', error);
@@ -326,6 +366,16 @@ const deleteFieldPaymentMethod = async (req, res) => {
       });
     }
 
+    // Buscar el método antes de soft-delete para poder limpiar su QR
+    const existing = await prisma.field_payment_methods.findUnique({
+      where: {
+        field_id_method_type: {
+          field_id: parseInt(fieldId),
+          method_type: methodType,
+        },
+      },
+    });
+
     // Soft delete
     await prisma.field_payment_methods.updateMany({
       where: {
@@ -334,10 +384,16 @@ const deleteFieldPaymentMethod = async (req, res) => {
       },
       data: {
         status: 'deleted',
+        qr_image_url: null,
         user_id_modification: adminId,
         date_time_modification: new Date(),
       },
     });
+
+    // Limpieza: eliminar QR en Wasabi si existía
+    if (existing?.qr_image_url) {
+      await deleteFileByUrl(existing.qr_image_url);
+    }
 
     res.json({
       success: true,
@@ -410,7 +466,7 @@ const uploadQRImage = async (req, res) => {
       buffer: req.file.buffer,
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
-      folder: 'payment-qr',
+      folder: WASABI_FOLDERS.PAYMENT_QR,
       customFilename: `qr-${fieldId}-${methodType}-${uniqueSuffix}`,
     });
 
@@ -436,12 +492,23 @@ const uploadQRImage = async (req, res) => {
       },
     });
 
+    await logActivity({
+      userId: field.admin_id || adminId,
+      action: 'field.qr_updated',
+      entityType: ACTIVITY_TYPES.FIELD,
+      entityId: parseInt(fieldId),
+      description: `Código QR de ${methodType} actualizado en "${field.name}"`,
+      status: ACTIVITY_STATUS.SUCCESS,
+      ipAddress: resolveIp(req),
+      actorUserId: adminId,
+    });
+
     res.json({
       success: true,
       message: 'Imagen QR subida correctamente',
       data: {
-        qr_image_url: qrImageUrl,
-        method,
+        qr_image_url: toProxyUrl(qrImageUrl),
+        method: { ...method, qr_image_url: toProxyUrl(method.qr_image_url) },
       },
     });
   } catch (error) {

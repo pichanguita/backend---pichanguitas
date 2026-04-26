@@ -1,5 +1,23 @@
 const pool = require('../config/db');
 const { toProxyUrl } = require('../services/wasabiService');
+const { weekDayOrderSql } = require('../utils/fieldSchedule');
+
+/**
+ * Obtener horarios operativos (field_schedules) de una cancha como filas snake_case.
+ * Fuente única de verdad reutilizada por getFieldById y getFieldConfig.
+ * @param {number} fieldId
+ * @returns {Promise<Array>} filas { id, day_of_week, is_open, open_time, close_time }
+ */
+const getFieldSchedulesRows = async fieldId => {
+  const result = await pool.query(
+    `SELECT id, day_of_week, is_open, open_time, close_time
+     FROM field_schedules
+     WHERE field_id = $1
+     ORDER BY ${weekDayOrderSql()}`,
+    [fieldId]
+  );
+  return result.rows;
+};
 
 /**
  * Obtener todas las canchas con filtros
@@ -121,12 +139,35 @@ const getAllFields = async (filters = {}) => {
   const result = await pool.query(query, params);
   const fields = result.rows;
 
+  // Calcular en vivo qué canchas están en mantenimiento HOY (zona Lima).
+  // El status guardado en BD es una caché que puede quedar desfasada si el cron
+  // diario no corrió; esta verificación lo corrige sin depender de ese job.
+  let fieldsUnderMaintenance = new Set();
+  try {
+    const todayLima = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
+    const activeMaintenanceRes = await pool.query(
+      `SELECT DISTINCT field_id
+       FROM field_maintenance_schedules
+       WHERE start_date <= $1 AND end_date >= $1`,
+      [todayLima]
+    );
+    fieldsUnderMaintenance = new Set(activeMaintenanceRes.rows.map(r => r.field_id));
+  } catch (err) {
+    console.error('Error calculando mantenimientos activos:', err.message);
+  }
+
   // Obtener datos relacionados para cada cancha
   // Cada sub-query está protegida individualmente para que un error en una
   // tabla relacionada no impida cargar todas las canchas
   const { getImagesByFieldId } = require('./fieldImagesModel');
 
   for (const field of fields) {
+    // Resolver status efectivo: solo reescribir si el status cacheado es
+    // 'available' o 'maintenance'; estados administrativos ('closed',
+    // 'inactive', 'deleted', 'pending', 'unavailable') no se tocan.
+    if (field.status === 'available' || field.status === 'maintenance') {
+      field.status = fieldsUnderMaintenance.has(field.id) ? 'maintenance' : 'available';
+    }
     // Imágenes (convertir URLs de Wasabi a proxy)
     try {
       const images = await getImagesByFieldId(field.id);
@@ -248,6 +289,25 @@ const getAllFields = async (filters = {}) => {
       console.error(`Error obteniendo precios especiales para cancha ${field.id}:`, err.message);
       field.specialPricing = [];
     }
+
+    // Mantenimientos programados (rangos start_date / end_date).
+    // Se exponen para que el frontend pueda decidir si la cancha está
+    // disponible PARA LA FECHA QUE EL CLIENTE QUIERE RESERVAR — el campo
+    // `field.status` solo refleja el estado de HOY y no sirve para fechas
+    // futuras o pasadas.
+    try {
+      const maintenanceQuery = `
+        SELECT id, start_date, end_date, reason
+        FROM field_maintenance_schedules
+        WHERE field_id = $1
+        ORDER BY start_date ASC
+      `;
+      const maintenanceResult = await pool.query(maintenanceQuery, [field.id]);
+      field.maintenance_schedules = maintenanceResult.rows;
+    } catch (err) {
+      console.error(`Error obteniendo mantenimientos para cancha ${field.id}:`, err.message);
+      field.maintenance_schedules = [];
+    }
   }
 
   return fields;
@@ -286,6 +346,23 @@ const getFieldById = async id => {
   }
 
   const field = fieldResult.rows[0];
+
+  // Resolver status efectivo (ver comentario en getAllFields). Evita depender
+  // del cron diario para reflejar que hoy cae o no dentro de un mantenimiento.
+  if (field.status === 'available' || field.status === 'maintenance') {
+    try {
+      const todayLima = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
+      const activeRes = await pool.query(
+        `SELECT 1 FROM field_maintenance_schedules
+         WHERE field_id = $1 AND start_date <= $2 AND end_date >= $2
+         LIMIT 1`,
+        [id, todayLima]
+      );
+      field.status = activeRes.rows.length > 0 ? 'maintenance' : 'available';
+    } catch (err) {
+      console.error(`Error verificando mantenimiento para cancha ${id}:`, err.message);
+    }
+  }
 
   // Datos relacionados con protección individual por sub-query
   // Deportes desde field_sports
@@ -399,6 +476,14 @@ const getFieldById = async id => {
   } catch (err) {
     console.error(`Error obteniendo precios especiales para cancha ${id}:`, err.message);
     field.specialPricing = [];
+  }
+
+  // Horario operativo desde field_schedules (usado por validación de reservas y UX cliente)
+  try {
+    field.schedules = await getFieldSchedulesRows(id);
+  } catch (err) {
+    console.error(`Error obteniendo horarios para cancha ${id}:`, err.message);
+    field.schedules = [];
   }
 
   return field;
@@ -994,23 +1079,8 @@ const getFieldConfig = async fieldId => {
       throw new Error('Cancha no encontrada');
     }
 
-    // Obtener horarios
-    const schedulesQuery = `
-      SELECT id, day_of_week, is_open, open_time, close_time
-      FROM field_schedules
-      WHERE field_id = $1
-      ORDER BY
-        CASE day_of_week
-          WHEN 'monday' THEN 1
-          WHEN 'tuesday' THEN 2
-          WHEN 'wednesday' THEN 3
-          WHEN 'thursday' THEN 4
-          WHEN 'friday' THEN 5
-          WHEN 'saturday' THEN 6
-          WHEN 'sunday' THEN 7
-        END
-    `;
-    const schedulesResult = await client.query(schedulesQuery, [fieldId]);
+    // Obtener horarios (fuente única vía helper compartido)
+    const schedulesResult = { rows: await getFieldSchedulesRows(fieldId) };
 
     // Obtener amenidades
     const amenitiesQuery =
@@ -1406,4 +1476,5 @@ module.exports = {
   updateFieldRating,
   getFieldConfig,
   updateFieldConfig,
+  getFieldSchedulesRows,
 };

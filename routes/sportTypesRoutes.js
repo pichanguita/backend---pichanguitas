@@ -6,6 +6,7 @@ const {
   createNewSportType,
   updateExistingSportType,
   deleteSportTypeById,
+  getSportTypeFieldsCount,
 } = require('../controllers/sportTypesController');
 const verificarToken = require('../middleware/authMiddleware');
 
@@ -23,6 +24,10 @@ const verificarRolesPermitidos = (req, res, next) => {
 // GET /api/sport-types - Obtener todos los tipos de deportes
 // PÚBLICO: Permite acceso sin autenticación para mostrar tipos de deportes disponibles
 router.get('/', getSportTypes);
+
+// GET /api/sport-types/:id/fields-count - Obtener cantidad de canchas asociadas a un deporte
+// Requiere autenticación y rol de admin/superadmin (se usa para mensaje informativo previo a eliminar)
+router.get('/:id/fields-count', verificarToken, verificarRolesPermitidos, getSportTypeFieldsCount);
 
 // GET /api/sport-types/:id - Obtener un tipo de deporte por ID
 // PÚBLICO: Permite acceso sin autenticación para ver detalles de un tipo de deporte

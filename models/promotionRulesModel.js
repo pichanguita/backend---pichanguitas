@@ -1,4 +1,34 @@
 const pool = require('../config/db');
+const promotionLogger = require('../services/promotionLogger');
+
+/**
+ * Cláusula SQL reutilizable que define qué reservas cuentan como "horas jugadas"
+ * para promociones, badges y cálculo de progreso del cliente.
+ *
+ * Una reserva cuenta cuando:
+ * - NO está cancelada ni marcada como no_show.
+ * - La hora de inicio del evento ya pasó (zona horaria de servidor).
+ *
+ * Aceptar reservas `confirmed` con fecha pasada es necesario porque la transición
+ * a `completed` depende de que un admin presione "Completar" manualmente, lo que
+ * dejaría el progreso del cliente bloqueado en 0% si el admin no actúa.
+ *
+ * Asume que el alias de la tabla reservations es 'r'. Si la query usa otro alias
+ * (o sin alias), pasarlo como argumento.
+ *
+ * @param {string} [alias] - alias de la tabla reservations (ej. 'r' o '' para sin alias)
+ * @returns {string}
+ */
+const playedReservationClause = (alias = '') => {
+  const prefix = alias ? `${alias}.` : '';
+  return `
+    ${prefix}status NOT IN ('cancelled', 'no_show')
+    AND (
+      ${prefix}status = 'completed'
+      OR (${prefix}date + COALESCE(${prefix}start_time, '00:00'::time)) < NOW()
+    )
+  `;
+};
 
 /**
  * Obtener todas las reglas de promoción con filtros
@@ -655,11 +685,13 @@ const getCustomerPromotions = async userId => {
     });
   });
 
-  // Obtener TODAS las horas jugadas por el cliente (para promociones globales)
+  // Obtener TODAS las horas jugadas por el cliente (para promociones globales).
+  // "Jugadas" = reservas no canceladas cuyo evento ya pasó (ver playedReservationClause).
   const totalHoursQuery = `
     SELECT COALESCE(SUM(hours), 0) as total_hours
     FROM reservations
-    WHERE customer_id = $1 AND status = 'completed'
+    WHERE customer_id = $1
+      AND ${playedReservationClause()}
   `;
   const totalHoursResult = await pool.query(totalHoursQuery, [customer.id]);
   const totalPlayedHours = parseFloat(totalHoursResult.rows[0]?.total_hours) || 0;
@@ -668,7 +700,8 @@ const getCustomerPromotions = async userId => {
   const hoursByFieldQuery = `
     SELECT field_id, COALESCE(SUM(hours), 0) as hours
     FROM reservations
-    WHERE customer_id = $1 AND status = 'completed'
+    WHERE customer_id = $1
+      AND ${playedReservationClause()}
     GROUP BY field_id
   `;
   const hoursByFieldResult = await pool.query(hoursByFieldQuery, [customer.id]);
@@ -697,44 +730,48 @@ const getCustomerPromotions = async userId => {
     };
   });
 
-  // Calcular progreso para cada promoción
+  // Calcular progreso para cada promoción.
+  // Modelo one-shot: una promoción se canjea UNA vez por cliente
+  // (constraint UNIQUE en customer_promotion_redemptions).
   const rulesWithProgress = rules.map(rule => {
     const hoursRequired = parseFloat(rule.hours_required);
     const associatedFields = fieldsByRule[rule.id] || [];
     const redemptionInfo = redemptionsByRule[rule.id] || { count: 0, hoursConsumed: 0 };
+    const alreadyRedeemed = redemptionInfo.count > 0;
 
     // Calcular horas jugadas según el tipo de promoción
     let hoursPlayed = 0;
-
     if (rule.applies_to === 'all') {
-      // Promoción global: cuenta TODAS las horas de todas las canchas
       hoursPlayed = totalPlayedHours;
     } else if (rule.applies_to === 'specific_fields' && associatedFields.length > 0) {
-      // Promoción específica: solo cuenta horas de las canchas asignadas
       associatedFields.forEach(field => {
         hoursPlayed += hoursByField[field.id] || 0;
       });
     }
 
-    // Horas disponibles = Jugadas - Consumidas en canjes anteriores
-    const availableHours = Math.max(0, hoursPlayed - redemptionInfo.hoursConsumed);
-
-    const progressPercent = Math.min(100, (availableHours / hoursRequired) * 100);
-    const hoursUntilNext = Math.max(0, hoursRequired - availableHours);
-    const canRedeem = availableHours >= hoursRequired;
+    // Si ya canjeó: progreso 100% y canje deshabilitado.
+    // Si no canjeó: progreso vs horas jugadas reales (capado a 100%).
+    const progressPercent = alreadyRedeemed
+      ? 100
+      : Math.min(100, (hoursPlayed / hoursRequired) * 100);
+    const hoursUntilNext = alreadyRedeemed
+      ? 0
+      : Math.max(0, hoursRequired - hoursPlayed);
+    const canRedeem = !alreadyRedeemed && hoursPlayed >= hoursRequired;
 
     return {
       id: rule.id,
       name: rule.name,
       description: rule.description,
-      hoursRequired: hoursRequired,
+      hoursRequired,
       freeHours: parseFloat(rule.free_hours),
       appliesTo: rule.applies_to,
       fields: associatedFields,
-      currentHours: Math.round(availableHours * 10) / 10,
+      currentHours: Math.round(Math.min(hoursPlayed, hoursRequired) * 10) / 10,
       progressPercent: Math.round(progressPercent),
       hoursUntilNext: Math.round(hoursUntilNext * 10) / 10,
       canRedeem,
+      alreadyRedeemed,
       timesRedeemed: redemptionInfo.count,
     };
   });
@@ -743,7 +780,10 @@ const getCustomerPromotions = async userId => {
     customer: {
       id: customer.id,
       name: customer.name,
-      totalHours: parseFloat(customer.total_hours) || 0,
+      // totalHours dinámico (mismo criterio que el progreso de promociones)
+      // para mantener UI y reglas de canje sincronizadas. customer.total_hours
+      // queda como caché administrativa pero no es la fuente de verdad aquí.
+      totalHours: totalPlayedHours,
       earnedFreeHours: parseFloat(customer.earned_free_hours) || 0,
       usedFreeHours: parseFloat(customer.used_free_hours) || 0,
       availableFreeHours: parseFloat(customer.available_free_hours) || 0,
@@ -800,7 +840,8 @@ const redeemPromotion = async (customerId, promotionRuleId, userId) => {
       const totalHoursResult = await client.query(
         `SELECT COALESCE(SUM(hours), 0) as total_hours
          FROM reservations
-         WHERE customer_id = $1 AND status = 'completed'`,
+         WHERE customer_id = $1
+           AND ${playedReservationClause()}`,
         [customerId]
       );
       hoursPlayed = parseFloat(totalHoursResult.rows[0]?.total_hours) || 0;
@@ -810,14 +851,15 @@ const redeemPromotion = async (customerId, promotionRuleId, userId) => {
         `SELECT COALESCE(SUM(r.hours), 0) as total_hours
          FROM reservations r
          WHERE r.customer_id = $1
-           AND r.status = 'completed'
+           AND ${playedReservationClause('r')}
            AND r.field_id IN (SELECT field_id FROM promotion_rule_fields WHERE rule_id = $2)`,
         [customerId, promotionRuleId]
       );
       hoursPlayed = parseFloat(fieldHoursResult.rows[0]?.total_hours) || 0;
     }
 
-    // Calcular horas ya consumidas en canjes anteriores de ESTA promoción
+    // Modelo one-shot: si ya canjeó esta promoción, error claro (sin INSERT
+    // que choque con UNIQUE).
     const redemptionsResult = await client.query(
       `SELECT COUNT(*) as redemption_count
        FROM customer_promotion_redemptions
@@ -825,10 +867,13 @@ const redeemPromotion = async (customerId, promotionRuleId, userId) => {
       [customerId, promotionRuleId]
     );
     const redemptionCount = parseInt(redemptionsResult.rows[0]?.redemption_count) || 0;
-    const hoursConsumed = redemptionCount * hoursRequired;
+    if (redemptionCount > 0) {
+      const err = new Error('Ya canjeaste esta promoción anteriormente.');
+      err.code = 'PROMOTION_ALREADY_REDEEMED';
+      throw err;
+    }
 
-    // Horas disponibles = Jugadas - Consumidas
-    const availableHours = Math.max(0, hoursPlayed - hoursConsumed);
+    const availableHours = hoursPlayed;
 
     if (availableHours < hoursRequired) {
       throw new Error(
@@ -843,7 +888,7 @@ const redeemPromotion = async (customerId, promotionRuleId, userId) => {
       [customerId, promotionRuleId, freeHours, userId]
     );
 
-    // Actualizar cliente: solo sumar horas gratis (ya NO modificamos accumulated_hours)
+    // Actualizar cliente: sumar horas gratis al saldo
     await client.query(
       `UPDATE customers
        SET earned_free_hours = COALESCE(earned_free_hours, 0) + $1,
@@ -853,6 +898,13 @@ const redeemPromotion = async (customerId, promotionRuleId, userId) => {
     );
 
     await client.query('COMMIT');
+
+    promotionLogger.redemptionManual({
+      customerId,
+      promotionRuleId,
+      hoursEarned: freeHours,
+      userId,
+    });
 
     return {
       success: true,
@@ -867,6 +919,128 @@ const redeemPromotion = async (customerId, promotionRuleId, userId) => {
   } finally {
     client.release();
   }
+};
+
+/**
+ * Canje automático de TODAS las promociones que el cliente ya cumplió.
+ * Diseñado para invocarse desde una transacción más amplia (ej. completar reserva):
+ * recibe el `client` de la transacción para garantizar atomicidad.
+ *
+ * Idempotente: el cálculo de "horas disponibles" descuenta canjes anteriores,
+ * por lo que invocar dos veces el mismo evento NO duplica beneficios.
+ *
+ * @param {Object} params
+ * @param {Object} params.client - cliente Pg con transacción activa
+ * @param {number} params.customerId
+ * @param {number} [params.triggerReservationId] - id de la reserva que disparó el canje (logging)
+ * @param {number} [params.userId] - id del usuario que registra (admin que completó la reserva)
+ * @returns {Promise<Array>} canjes realizados [{promotionRuleId, name, hoursEarned}]
+ */
+const autoRedeemEligiblePromotions = async ({
+  client,
+  customerId,
+  triggerReservationId = null,
+  userId = null,
+}) => {
+  if (!client || !customerId) return [];
+
+  // Promociones activas (mismo criterio que getCustomerPromotions)
+  const rulesRes = await client.query(
+    `SELECT id, name, hours_required, free_hours, applies_to
+     FROM promotion_rules
+     WHERE is_active = true AND status = 'active'
+     ORDER BY hours_required ASC`
+  );
+  const rules = rulesRes.rows;
+  if (rules.length === 0) return [];
+
+  const redemptions = [];
+
+  for (const rule of rules) {
+    const hoursRequired = parseFloat(rule.hours_required) || 0;
+    const freeHours = parseFloat(rule.free_hours) || 0;
+    if (hoursRequired <= 0 || freeHours <= 0) continue;
+
+    // Una promoción se canjea UNA vez por cliente (UNIQUE en BD).
+    // Si ya tiene canje, saltamos para evitar el error de UNIQUE y respetar
+    // el contrato "sin beneficios duplicados".
+    const redRes = await client.query(
+      `SELECT COUNT(*)::int AS cnt
+       FROM customer_promotion_redemptions
+       WHERE customer_id = $1 AND promotion_rule_id = $2`,
+      [customerId, rule.id]
+    );
+    if ((redRes.rows[0]?.cnt || 0) > 0) continue;
+
+    // Horas jugadas según tipo de promoción
+    let hoursPlayed = 0;
+    if (rule.applies_to === 'all') {
+      const r = await client.query(
+        `SELECT COALESCE(SUM(hours), 0) AS total
+         FROM reservations
+         WHERE customer_id = $1
+           AND ${playedReservationClause()}`,
+        [customerId]
+      );
+      hoursPlayed = parseFloat(r.rows[0]?.total) || 0;
+    } else if (rule.applies_to === 'specific_fields') {
+      const r = await client.query(
+        `SELECT COALESCE(SUM(r.hours), 0) AS total
+         FROM reservations r
+         WHERE r.customer_id = $1
+           AND ${playedReservationClause('r')}
+           AND r.field_id IN (SELECT field_id FROM promotion_rule_fields WHERE rule_id = $2)`,
+        [customerId, rule.id]
+      );
+      hoursPlayed = parseFloat(r.rows[0]?.total) || 0;
+    } else {
+      continue;
+    }
+
+    if (hoursPlayed < hoursRequired) continue;
+
+    // Insert único (la UNIQUE de BD garantiza idempotencia ante concurrencia)
+    await client.query(
+      `INSERT INTO customer_promotion_redemptions
+         (customer_id, promotion_rule_id, hours_earned, user_id_registration)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (customer_id, promotion_rule_id) DO NOTHING`,
+      [customerId, rule.id, freeHours, userId]
+    );
+
+    // Verificar que efectivamente se insertó (ON CONFLICT DO NOTHING no inserta
+    // si ya existe una fila concurrente)
+    const insCheck = await client.query(
+      `SELECT 1 FROM customer_promotion_redemptions
+       WHERE customer_id = $1 AND promotion_rule_id = $2`,
+      [customerId, rule.id]
+    );
+    const wasInserted = insCheck.rows.length > 0 && (redRes.rows[0]?.cnt || 0) === 0;
+    if (!wasInserted) continue;
+
+    redemptions.push({
+      promotionRuleId: rule.id,
+      name: rule.name,
+      hoursEarned: freeHours,
+    });
+
+    await client.query(
+      `UPDATE customers
+       SET earned_free_hours = COALESCE(earned_free_hours, 0) + $1,
+           available_free_hours = COALESCE(available_free_hours, 0) + $1
+       WHERE id = $2`,
+      [freeHours, customerId]
+    );
+
+    promotionLogger.redemptionAuto({
+      customerId,
+      promotionRuleId: rule.id,
+      hoursEarned: freeHours,
+      triggerReservationId,
+    });
+  }
+
+  return redemptions;
 };
 
 /**
@@ -906,6 +1080,7 @@ module.exports = {
   getPromotionRuleStats,
   getCustomerPromotions,
   redeemPromotion,
+  autoRedeemEligiblePromotions,
   getRedemptionHistory,
   getFieldsWithActiveRules,
   checkFieldsWithExistingRules,

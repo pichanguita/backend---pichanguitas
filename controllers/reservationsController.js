@@ -14,10 +14,18 @@ const {
 } = require('../models/reservationsModel');
 const { transformReservationToCamelCase } = require('../utils/transformers');
 const { getFieldById } = require('../models/fieldsModel');
+const { validateReservationAgainstSchedule } = require('../utils/fieldSchedule');
 const { createAlert } = require('../models/alertsModel');
 const { calculateFinalPrice } = require('../utils/pricingCalculator');
 const pool = require('../config/db');
-const { uploadFile } = require('../services/wasabiService');
+const { uploadFile, deleteFileByUrl, toProxyUrl } = require('../services/wasabiService');
+const { WASABI_FOLDERS } = require('../config/storage');
+const {
+  logActivity,
+  resolveIp,
+  ACTIVITY_TYPES,
+  ACTIVITY_STATUS,
+} = require('../services/activityLogsService');
 
 /**
  * Obtener todas las reservas con filtros
@@ -242,6 +250,22 @@ const createNewReservation = async (req, res) => {
       calculatedAdvancePayment = 0;
       calculatedRemainingPayment = parseFloat(total_price) || 0;
       console.log('💵 [EFECTIVO] Sin adelanto - pago total en cancha:', calculatedRemainingPayment);
+    }
+
+    // Validar contra horario operativo configurado por el admin (field_schedules).
+    // Si no hay configuración para ese día, se permite (convención: cancha sin horarios = abierta).
+    const scheduleCheck = validateReservationAgainstSchedule(
+      field.schedules,
+      date,
+      start_time,
+      end_time
+    );
+    if (!scheduleCheck.ok) {
+      return res.status(409).json({
+        success: false,
+        error: scheduleCheck.error,
+        code: scheduleCheck.code,
+      });
     }
 
     // Verificar disponibilidad
@@ -497,6 +521,20 @@ const createNewReservation = async (req, res) => {
       console.error('⚠️ Error creando alertas de reserva:', alertError);
     }
 
+    // Registrar actividad para el admin dueño de la cancha
+    if (field.admin_id) {
+      await logActivity({
+        userId: field.admin_id,
+        action: 'reservation.created',
+        entityType: ACTIVITY_TYPES.RESERVATION,
+        entityId: newReservation.id,
+        description: `Nueva reserva en "${field.name}" para el ${date} (${start_time}–${end_time}) por S/ ${total_price}`,
+        status: ACTIVITY_STATUS.SUCCESS,
+        ipAddress: resolveIp(req),
+        actorUserId: req.user?.id ?? field.admin_id,
+      });
+    }
+
     res.status(201).json({
       success: true,
       message: 'Reserva creada exitosamente',
@@ -504,6 +542,14 @@ const createNewReservation = async (req, res) => {
     });
   } catch (error) {
     console.error('Error al crear reserva:', error);
+    // Errores de negocio reconocibles → respuesta 409 con código.
+    if (error.code === 'INSUFFICIENT_FREE_HOURS') {
+      return res.status(409).json({
+        success: false,
+        error: error.message,
+        code: error.code,
+      });
+    }
     res.status(500).json({
       success: false,
       error: 'Error al crear reserva',
@@ -565,6 +611,24 @@ const updateExistingReservation = async (req, res) => {
       const checkDate = date || existingReservation.date;
       const checkStartTime = start_time || existingReservation.start_time;
       const checkEndTime = end_time || existingReservation.end_time;
+
+      // Validar contra horario operativo configurado (field_schedules)
+      const reservationField = await getFieldById(existingReservation.field_id);
+      if (reservationField) {
+        const scheduleCheck = validateReservationAgainstSchedule(
+          reservationField.schedules,
+          checkDate,
+          checkStartTime,
+          checkEndTime
+        );
+        if (!scheduleCheck.ok) {
+          return res.status(409).json({
+            success: false,
+            error: scheduleCheck.error,
+            code: scheduleCheck.code,
+          });
+        }
+      }
 
       const isAvailable = await checkAvailability(
         existingReservation.field_id,
@@ -691,6 +755,35 @@ const cancelReservationById = async (req, res) => {
 
     const cancelledReservation = await cancelReservation(id, cancellationData);
 
+    // Limpieza: eliminar voucher en Wasabi cuando se cancela la reserva
+    if (existingReservation.payment_voucher_url) {
+      await deleteFileByUrl(existingReservation.payment_voucher_url);
+    }
+
+    // Registrar actividad para el admin de la cancha
+    try {
+      const fieldOwner = await pool.query(
+        'SELECT admin_id, name FROM fields WHERE id = $1',
+        [existingReservation.field_id]
+      );
+      const adminId = fieldOwner.rows[0]?.admin_id;
+      const fieldName = fieldOwner.rows[0]?.name || 'cancha';
+      if (adminId) {
+        await logActivity({
+          userId: adminId,
+          action: 'reservation.cancelled',
+          entityType: ACTIVITY_TYPES.RESERVATION,
+          entityId: Number(id),
+          description: `Reserva cancelada en "${fieldName}" (${existingReservation.date?.toISOString?.().split('T')[0] || existingReservation.date})`,
+          status: ACTIVITY_STATUS.WARNING,
+          ipAddress: resolveIp(req),
+          actorUserId: req.user?.id ?? adminId,
+        });
+      }
+    } catch (_e) {
+      /* log best-effort */
+    }
+
     res.json({
       success: true,
       message: 'Reserva cancelada exitosamente',
@@ -774,6 +867,30 @@ const completeReservationById = async (req, res) => {
     const user_id = req.user?.id || 1;
     const completedReservation = await completeReservation(id, user_id);
 
+    // Log de actividad
+    try {
+      const fieldOwner = await pool.query(
+        'SELECT admin_id, name FROM fields WHERE id = $1',
+        [existingReservation.field_id]
+      );
+      const adminId = fieldOwner.rows[0]?.admin_id;
+      const fieldName = fieldOwner.rows[0]?.name || 'cancha';
+      if (adminId) {
+        await logActivity({
+          userId: adminId,
+          action: 'reservation.completed',
+          entityType: ACTIVITY_TYPES.RESERVATION,
+          entityId: Number(id),
+          description: `Reserva completada en "${fieldName}"`,
+          status: ACTIVITY_STATUS.SUCCESS,
+          ipAddress: resolveIp(req),
+          actorUserId: req.user?.id ?? adminId,
+        });
+      }
+    } catch (_e) {
+      /* best-effort */
+    }
+
     res.json({
       success: true,
       message: 'Reserva completada exitosamente',
@@ -845,6 +962,30 @@ const markReservationAsNoShow = async (req, res) => {
     const user_id = req.user?.id || 1;
     const noShowReservation = await markAsNoShow(id, user_id);
 
+    // Log de actividad
+    try {
+      const fieldOwner = await pool.query(
+        'SELECT admin_id, name FROM fields WHERE id = $1',
+        [existingReservation.field_id]
+      );
+      const adminId = fieldOwner.rows[0]?.admin_id;
+      const fieldName = fieldOwner.rows[0]?.name || 'cancha';
+      if (adminId) {
+        await logActivity({
+          userId: adminId,
+          action: 'reservation.no_show',
+          entityType: ACTIVITY_TYPES.RESERVATION,
+          entityId: Number(id),
+          description: `Reserva marcada como no-show en "${fieldName}"`,
+          status: ACTIVITY_STATUS.WARNING,
+          ipAddress: resolveIp(req),
+          actorUserId: req.user?.id ?? adminId,
+        });
+      }
+    } catch (_e) {
+      /* best-effort */
+    }
+
     // Si se debe crear un reembolso, crearlo en la tabla refunds
     let refundCreated = null;
     if (shouldRefund && refundAmount > 0) {
@@ -893,7 +1034,28 @@ const checkFieldAvailability = async (req, res) => {
       });
     }
 
-    const isAvailable = await checkAvailability(parseInt(field_id), date, start_time, end_time);
+    const parsedFieldId = parseInt(field_id);
+
+    // Respetar horario operativo (field_schedules) antes de revisar solapamientos
+    const checkField = await getFieldById(parsedFieldId);
+    if (checkField) {
+      const scheduleCheck = validateReservationAgainstSchedule(
+        checkField.schedules,
+        date,
+        start_time,
+        end_time
+      );
+      if (!scheduleCheck.ok) {
+        return res.json({
+          success: true,
+          available: false,
+          code: scheduleCheck.code,
+          message: scheduleCheck.error,
+        });
+      }
+    }
+
+    const isAvailable = await checkAvailability(parsedFieldId, date, start_time, end_time);
 
     res.json({
       success: true,
@@ -1010,15 +1172,8 @@ const uploadPaymentVoucher = async (req, res) => {
       buffer: req.file.buffer,
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
-      folder: 'vouchers',
+      folder: WASABI_FOLDERS.RESERVATION_VOUCHERS,
       customFilename: `voucher-${uniqueSuffix}`,
-    });
-
-    console.log('Voucher subido a Wasabi exitosamente:', {
-      filename: result.filename,
-      originalName: req.file.originalname,
-      size: result.size,
-      url: result.url,
     });
 
     res.json({
@@ -1026,6 +1181,8 @@ const uploadPaymentVoucher = async (req, res) => {
       message: 'Voucher subido exitosamente',
       data: {
         url: result.url,
+        proxyUrl: toProxyUrl(result.url),
+        wasabiKey: result.key,
         filename: result.filename,
         originalName: req.file.originalname,
         size: result.size,

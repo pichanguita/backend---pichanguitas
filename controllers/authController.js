@@ -2,6 +2,12 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
 const { findUserByIdentifier, resetLoginAttempts } = require('../models/authModel');
+const {
+  logActivity,
+  resolveIp,
+  ACTIVITY_TYPES,
+  ACTIVITY_STATUS,
+} = require('../services/activityLogsService');
 
 const login = async (req, res) => {
   const { identifier, password } = req.body;
@@ -54,6 +60,17 @@ const login = async (req, res) => {
 
     // Login exitoso: resetear intentos
     await resetLoginAttempts(user.id);
+
+    // Registrar actividad de login
+    await logActivity({
+      userId: user.id,
+      action: 'auth.login',
+      entityType: ACTIVITY_TYPES.LOGIN,
+      description: 'Inició sesión en el sistema',
+      status: ACTIVITY_STATUS.SUCCESS,
+      ipAddress: resolveIp(req),
+      actorUserId: user.id,
+    });
 
     // Generar token JWT
     const token = jwt.sign(

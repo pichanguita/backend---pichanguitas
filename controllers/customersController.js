@@ -7,7 +7,6 @@ const {
   updateCustomerStats,
   deleteCustomer,
   phoneNumberExists,
-  getCustomerPromotionHistory,
   getCustomersByFieldAdmin,
   getAllCustomersWithStats,
 } = require('../models/customersModel');
@@ -288,38 +287,6 @@ const deleteCustomerById = async (req, res) => {
 };
 
 /**
- * Obtener historial de promociones de un cliente
- */
-const getPromotionHistory = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Verificar si el cliente existe
-    const existingCustomer = await getCustomerById(id);
-    if (!existingCustomer) {
-      return res.status(404).json({
-        success: false,
-        error: 'Cliente no encontrado',
-      });
-    }
-
-    const history = await getCustomerPromotionHistory(id);
-
-    res.json({
-      success: true,
-      data: history,
-      count: history.length,
-    });
-  } catch (error) {
-    console.error('Error al obtener historial de promociones:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener historial de promociones',
-    });
-  }
-};
-
-/**
  * Obtener clientes por admin (basado en reservas en sus canchas)
  * GET /api/customers/by-admin/:adminId
  * O GET /api/customers/my-clients (usa el admin del token)
@@ -457,7 +424,6 @@ module.exports = {
   updateExistingCustomer,
   updateStats,
   deleteCustomerById,
-  getPromotionHistory,
   getMyClients,
   getMyFreeHours,
 };

@@ -1,5 +1,3 @@
-const path = require('path');
-
 const cors = require('cors');
 const cron = require('node-cron');
 const express = require('express');
@@ -54,6 +52,7 @@ const monthlyPaymentsRoutes = require('./routes/monthlyPaymentsRoutes');
 const platformPaymentMethodsRoutes = require('./routes/platformPaymentMethodsRoutes');
 const publicRoutes = require('./routes/publicRoutes');
 const passwordResetRoutes = require('./routes/passwordResetRoutes');
+const activityLogsRoutes = require('./routes/activityLogsRoutes');
 
 const app = express();
 
@@ -74,9 +73,6 @@ app.use(cors(corsOptions));
 // Aumentar límite de payload para soportar archivos/imágenes en base64
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
-// 📌 Servir archivos estáticos (uploads)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Rutas
 app.use('/api/auth', authRoutes);
@@ -115,29 +111,41 @@ app.use('/api/field-payment-methods', fieldPaymentMethodsRoutes);
 app.use('/api/monthly-payments', monthlyPaymentsRoutes);
 app.use('/api/platform-payment-methods', platformPaymentMethodsRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/activity-logs', activityLogsRoutes);
 
-// Proxy público para imágenes de Wasabi (sin autenticación)
-const { getFileStream, extractKeyFromUrl } = require('./services/wasabiService');
-app.get('/api/media/*key', async (req, res) => {
+// Proxy público para archivos no sensibles de Wasabi.
+// Los documentos sensibles (solicitudes de registro) se sirven vía
+// endpoint autenticado en /api/registration-requests/:id/files/:fileId/download.
+const { getFileStream } = require('./services/wasabiService');
+const {
+  WASABI_FOLDERS,
+  MEDIA_PROXY_PATH,
+} = require('./config/storage');
+
+const PRIVATE_PROXY_PREFIXES = [`${WASABI_FOLDERS.REGISTRATION_REQUESTS}/`];
+
+app.get(`${MEDIA_PROXY_PATH}/*key`, async (req, res) => {
   try {
-    // Reconstruir la key desde la ruta: /api/media/fields-photos/file.jpg → fields-photos/file.jpg
-    // En Express 5 (path-to-regexp v8), *key retorna un array de segmentos
     const rawKey = req.params.key;
     const key = Array.isArray(rawKey) ? rawKey.join('/') : rawKey;
     if (!key) {
       return res.status(400).json({ error: 'Key requerida' });
     }
+    // Bloquear acceso al proxy para carpetas privadas.
+    if (PRIVATE_PROXY_PREFIXES.some(prefix => key.startsWith(prefix))) {
+      return res.status(403).json({ error: 'Acceso denegado' });
+    }
     const { stream, contentType, contentLength } = await getFileStream(key);
     res.set('Content-Type', contentType || 'application/octet-stream');
     if (contentLength) res.set('Content-Length', contentLength);
-    res.set('Cache-Control', 'public, max-age=604800'); // Cache 7 días
+    res.set('Cache-Control', 'public, max-age=604800');
     stream.pipe(res);
   } catch (error) {
     if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
-      return res.status(404).json({ error: 'Imagen no encontrada' });
+      return res.status(404).json({ error: 'Archivo no encontrado' });
     }
-    console.error('Error al servir imagen:', error.message);
-    res.status(500).json({ error: 'Error al servir imagen' });
+    console.error('Error al servir archivo:', error.message);
+    res.status(500).json({ error: 'Error al servir archivo' });
   }
 });
 

@@ -357,6 +357,8 @@ const rejectPayment = async (paymentId, userId, reason) => {
     throw new Error('No se puede rechazar un pago ya confirmado');
   }
 
+  const previousVoucherUrl = existing.rows[0].payment_voucher_url;
+
   // Volver a pending y limpiar datos de reporte
   const result = await pool.query(
     `
@@ -376,7 +378,8 @@ const rejectPayment = async (paymentId, userId, reason) => {
     [reason, userId, paymentId]
   );
 
-  return result.rows[0];
+  // Retorna la URL previa al reset para que el controlador limpie el objeto en Wasabi.
+  return { ...result.rows[0], previous_payment_voucher_url: previousVoucherUrl };
 };
 
 /**

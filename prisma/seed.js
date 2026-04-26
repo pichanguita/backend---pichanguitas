@@ -313,11 +313,11 @@ async function main() {
   console.log('Poblando criterios de insignias...');
   await prisma.badge_criteria.createMany({
     data: [
-      { code: 'total_reservations', name: 'Total de Reservas', description: 'Cantidad total de reservas completadas por el cliente', calculation_table: 'reservations', calculation_field: 'id', calculation_type: 'count', filter_conditions: JSON.stringify({ status: 'completed' }), is_active: true },
-      { code: 'total_hours', name: 'Horas Totales Jugadas', description: 'Suma total de horas reservadas y completadas', calculation_table: 'reservations', calculation_field: 'hours', calculation_type: 'sum', filter_conditions: JSON.stringify({ status: 'completed' }), is_active: true },
-      { code: 'total_spent', name: 'Total Gastado', description: 'Monto total gastado en reservas', calculation_table: 'customers', calculation_field: 'total_spent', calculation_type: 'value', filter_conditions: null, is_active: true },
-      { code: 'total_reviews', name: 'Resenas Realizadas', description: 'Cantidad de resenas publicadas', calculation_table: 'reviews', calculation_field: 'id', calculation_type: 'count', filter_conditions: JSON.stringify({ is_visible: true }), is_active: true },
-      { code: 'consecutive_weeks', name: 'Semanas Consecutivas', description: 'Numero de semanas consecutivas con al menos una reserva', calculation_table: 'reservations', calculation_field: 'date', calculation_type: 'consecutive', filter_conditions: JSON.stringify({ status: 'completed' }), is_active: true },
+      { code: 'total_reservations', name: 'Total de Reservas', description: 'Cantidad total de reservas completadas por el cliente', calculation_table: 'reservations', calculation_field: 'id', calculation_type: 'count', filter_conditions: JSON.stringify({ status: 'completed' }), unit: 'reservas', is_active: true },
+      { code: 'total_hours', name: 'Horas Totales Jugadas', description: 'Suma total de horas reservadas y completadas', calculation_table: 'reservations', calculation_field: 'hours', calculation_type: 'sum', filter_conditions: JSON.stringify({ status: 'completed' }), unit: 'horas', is_active: true },
+      { code: 'total_spent', name: 'Total Gastado', description: 'Monto total gastado en reservas', calculation_table: 'customers', calculation_field: 'total_spent', calculation_type: 'value', filter_conditions: null, unit: 'S/', is_active: true },
+      { code: 'total_reviews', name: 'Resenas Realizadas', description: 'Cantidad de resenas publicadas', calculation_table: 'reviews', calculation_field: 'id', calculation_type: 'count', filter_conditions: JSON.stringify({ is_visible: true }), unit: 'reseñas', is_active: true },
+      { code: 'consecutive_weeks', name: 'Semanas Consecutivas', description: 'Numero de semanas consecutivas con al menos una reserva', calculation_table: 'reservations', calculation_field: 'date', calculation_type: 'streak', filter_conditions: JSON.stringify({ status: 'completed' }), unit: 'semanas', is_active: true },
     ],
     skipDuplicates: true,
   });
@@ -332,11 +332,11 @@ async function main() {
 
   await prisma.badges.createMany({
     data: [
-      { name: 'Jugador Frecuente', icon: '⚽', description: 'Otorgada por cantidad de reservas realizadas', criteria_type: 'reservations', criteria_id: criteriaMap['total_reservations'], is_active: true, status: 'active' },
-      { name: 'Maratonista', icon: '🏃', description: 'Otorgada por horas totales jugadas', criteria_type: 'hours', criteria_id: criteriaMap['total_hours'], is_active: true, status: 'active' },
-      { name: 'Patrocinador', icon: '💰', description: 'Otorgada por monto total gastado', criteria_type: 'spending', criteria_id: criteriaMap['total_spent'], is_active: true, status: 'active' },
-      { name: 'Critico Deportivo', icon: '⭐', description: 'Otorgada por cantidad de resenas realizadas', criteria_type: 'reviews', criteria_id: criteriaMap['total_reviews'], is_active: true, status: 'active' },
-      { name: 'Constante', icon: '📅', description: 'Otorgada por semanas consecutivas jugando', criteria_type: 'consecutive', criteria_id: criteriaMap['consecutive_weeks'], is_active: true, status: 'active' },
+      { name: 'Jugador Frecuente', icon: '⚽', description: 'Otorgada por cantidad de reservas realizadas', criteria_id: criteriaMap['total_reservations'], is_active: true, status: 'active' },
+      { name: 'Maratonista', icon: '🏃', description: 'Otorgada por horas totales jugadas', criteria_id: criteriaMap['total_hours'], is_active: true, status: 'active' },
+      { name: 'Patrocinador', icon: '💰', description: 'Otorgada por monto total gastado', criteria_id: criteriaMap['total_spent'], is_active: true, status: 'active' },
+      { name: 'Critico Deportivo', icon: '⭐', description: 'Otorgada por cantidad de resenas realizadas', criteria_id: criteriaMap['total_reviews'], is_active: true, status: 'active' },
+      { name: 'Constante', icon: '📅', description: 'Otorgada por semanas consecutivas jugando', criteria_id: criteriaMap['consecutive_weeks'], is_active: true, status: 'active' },
     ],
     skipDuplicates: true,
   });
@@ -354,34 +354,34 @@ async function main() {
 
   const badgeTiersData = [
     ...tierTemplate('Jugador Frecuente', [
-      { tier: 'bronze', icon: '🥉', label: 'Principiante', required_value: 5, reward_hours: 0.5, color: '#CD7F32' },
-      { tier: 'silver', icon: '🥈', label: 'Regular', required_value: 20, reward_hours: 1.0, color: '#C0C0C0' },
-      { tier: 'gold', icon: '🥇', label: 'Veterano', required_value: 50, reward_hours: 2.0, color: '#FFD700' },
-      { tier: 'platinum', icon: '💎', label: 'Leyenda', required_value: 100, reward_hours: 5.0, color: '#E5E4E2' },
+      { tier: 'bronze', icon: '🥉', label: 'Principiante', required_value: 5, color: '#CD7F32' },
+      { tier: 'silver', icon: '🥈', label: 'Regular', required_value: 20, color: '#C0C0C0' },
+      { tier: 'gold', icon: '🥇', label: 'Veterano', required_value: 50, color: '#FFD700' },
+      { tier: 'platinum', icon: '💎', label: 'Leyenda', required_value: 100, color: '#E5E4E2' },
     ]),
     ...tierTemplate('Maratonista', [
-      { tier: 'bronze', icon: '🥉', label: '10 horas', required_value: 10, reward_hours: 0.5, color: '#CD7F32' },
-      { tier: 'silver', icon: '🥈', label: '50 horas', required_value: 50, reward_hours: 1.0, color: '#C0C0C0' },
-      { tier: 'gold', icon: '🥇', label: '100 horas', required_value: 100, reward_hours: 2.0, color: '#FFD700' },
-      { tier: 'platinum', icon: '💎', label: '500 horas', required_value: 500, reward_hours: 5.0, color: '#E5E4E2' },
+      { tier: 'bronze', icon: '🥉', label: '10 horas', required_value: 10, color: '#CD7F32' },
+      { tier: 'silver', icon: '🥈', label: '50 horas', required_value: 50, color: '#C0C0C0' },
+      { tier: 'gold', icon: '🥇', label: '100 horas', required_value: 100, color: '#FFD700' },
+      { tier: 'platinum', icon: '💎', label: '500 horas', required_value: 500, color: '#E5E4E2' },
     ]),
     ...tierTemplate('Patrocinador', [
-      { tier: 'bronze', icon: '🥉', label: 'S/ 100+', required_value: 100, reward_hours: 0.5, color: '#CD7F32' },
-      { tier: 'silver', icon: '🥈', label: 'S/ 500+', required_value: 500, reward_hours: 1.0, color: '#C0C0C0' },
-      { tier: 'gold', icon: '🥇', label: 'S/ 1000+', required_value: 1000, reward_hours: 2.0, color: '#FFD700' },
-      { tier: 'platinum', icon: '💎', label: 'S/ 5000+', required_value: 5000, reward_hours: 5.0, color: '#E5E4E2' },
+      { tier: 'bronze', icon: '🥉', label: 'S/ 100+', required_value: 100, color: '#CD7F32' },
+      { tier: 'silver', icon: '🥈', label: 'S/ 500+', required_value: 500, color: '#C0C0C0' },
+      { tier: 'gold', icon: '🥇', label: 'S/ 1000+', required_value: 1000, color: '#FFD700' },
+      { tier: 'platinum', icon: '💎', label: 'S/ 5000+', required_value: 5000, color: '#E5E4E2' },
     ]),
     ...tierTemplate('Critico Deportivo', [
-      { tier: 'bronze', icon: '🥉', label: '3 resenas', required_value: 3, reward_hours: 0.5, color: '#CD7F32' },
-      { tier: 'silver', icon: '🥈', label: '10 resenas', required_value: 10, reward_hours: 1.0, color: '#C0C0C0' },
-      { tier: 'gold', icon: '🥇', label: '25 resenas', required_value: 25, reward_hours: 2.0, color: '#FFD700' },
-      { tier: 'platinum', icon: '💎', label: '50 resenas', required_value: 50, reward_hours: 3.0, color: '#E5E4E2' },
+      { tier: 'bronze', icon: '🥉', label: '3 resenas', required_value: 3, color: '#CD7F32' },
+      { tier: 'silver', icon: '🥈', label: '10 resenas', required_value: 10, color: '#C0C0C0' },
+      { tier: 'gold', icon: '🥇', label: '25 resenas', required_value: 25, color: '#FFD700' },
+      { tier: 'platinum', icon: '💎', label: '50 resenas', required_value: 50, color: '#E5E4E2' },
     ]),
     ...tierTemplate('Constante', [
-      { tier: 'bronze', icon: '🥉', label: '4 semanas', required_value: 4, reward_hours: 1.0, color: '#CD7F32' },
-      { tier: 'silver', icon: '🥈', label: '8 semanas', required_value: 8, reward_hours: 2.0, color: '#C0C0C0' },
-      { tier: 'gold', icon: '🥇', label: '16 semanas', required_value: 16, reward_hours: 3.0, color: '#FFD700' },
-      { tier: 'platinum', icon: '💎', label: '52 semanas', required_value: 52, reward_hours: 10.0, color: '#E5E4E2' },
+      { tier: 'bronze', icon: '🥉', label: '4 semanas', required_value: 4, color: '#CD7F32' },
+      { tier: 'silver', icon: '🥈', label: '8 semanas', required_value: 8, color: '#C0C0C0' },
+      { tier: 'gold', icon: '🥇', label: '16 semanas', required_value: 16, color: '#FFD700' },
+      { tier: 'platinum', icon: '💎', label: '52 semanas', required_value: 52, color: '#E5E4E2' },
     ]),
   ];
 
