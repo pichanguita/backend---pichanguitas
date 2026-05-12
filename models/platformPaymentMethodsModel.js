@@ -29,7 +29,10 @@ const getMethodById = async id => {
 };
 
 /**
- * Crear un nuevo método de pago
+ * Crear un nuevo método de pago (idempotente).
+ * Si ya existe un registro con el mismo (name, account_number) creado por
+ * el mismo usuario, devuelve el existente en lugar de insertar duplicado.
+ * Esto protege contra doble-clicks en el botón "Agregar" y reintentos de red.
  */
 const createMethod = async (data, userId) => {
   const {
@@ -45,6 +48,21 @@ const createMethod = async (data, userId) => {
     is_active = true,
     order_index = 0,
   } = data;
+
+  const existing = await pool.query(
+    `
+    SELECT * FROM platform_payment_methods
+    WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))
+      AND COALESCE(TRIM(account_number), '') = COALESCE(TRIM($2), '')
+      AND user_id_registration IS NOT DISTINCT FROM $3
+    LIMIT 1
+  `,
+    [name, account_number, userId]
+  );
+
+  if (existing.rows[0]) {
+    return existing.rows[0];
+  }
 
   const result = await pool.query(
     `

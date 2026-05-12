@@ -47,6 +47,7 @@ const getAllFields = async (filters = {}) => {
       f.capacity,
       f.requires_advance_payment,
       f.advance_payment_amount,
+      f.requires_manual_confirmation,
       f.is_active,
       f.is_multi_sport,
       f.rating,
@@ -177,22 +178,28 @@ const getAllFields = async (filters = {}) => {
       field.images = [];
     }
 
-    // Deportes desde field_sports
+    // Deportes desde field_sports (sólo deportes activos del catálogo).
+    // Las filas en field_sports que apuntan a deportes soft-deleted quedan en
+    // BD como historial pero NO se exponen al frontend.
     try {
       const sportsQuery = `
-        SELECT fs.sport_id, st.name AS sport_name
+        SELECT fs.sport_id, st.name AS sport_name, st.icon AS sport_icon
         FROM field_sports fs
         INNER JOIN sport_types st ON fs.sport_id = st.id
         WHERE fs.field_id = $1
+          AND st.is_active = true
+          AND st.status = 'active'
         ORDER BY st.name
       `;
       const sportsResult = await pool.query(sportsQuery, [field.id]);
       field.sport_ids = sportsResult.rows.map(row => row.sport_id);
       field.sport_names = sportsResult.rows.map(row => row.sport_name);
+      field.sport_icons = sportsResult.rows.map(row => row.sport_icon);
     } catch (err) {
       console.error(`Error obteniendo deportes para cancha ${field.id}:`, err.message);
       field.sport_ids = [];
       field.sport_names = [];
+      field.sport_icons = [];
     }
 
     // Amenities (servicios) desde field_amenities
@@ -365,22 +372,28 @@ const getFieldById = async id => {
   }
 
   // Datos relacionados con protección individual por sub-query
-  // Deportes desde field_sports
+  // Deportes desde field_sports (sólo deportes activos del catálogo).
+  // Las filas en field_sports que apuntan a deportes soft-deleted quedan en
+  // BD como historial pero NO se exponen al frontend.
   try {
     const sportsQuery = `
-      SELECT fs.sport_id, st.name AS sport_name
+      SELECT fs.sport_id, st.name AS sport_name, st.icon AS sport_icon
       FROM field_sports fs
       INNER JOIN sport_types st ON fs.sport_id = st.id
       WHERE fs.field_id = $1
+        AND st.is_active = true
+        AND st.status = 'active'
       ORDER BY st.name
     `;
     const sportsResult = await pool.query(sportsQuery, [id]);
     field.sport_ids = sportsResult.rows.map(row => row.sport_id);
     field.sport_names = sportsResult.rows.map(row => row.sport_name);
+    field.sport_icons = sportsResult.rows.map(row => row.sport_icon);
   } catch (err) {
     console.error(`Error obteniendo deportes para cancha ${id}:`, err.message);
     field.sport_ids = [];
     field.sport_names = [];
+    field.sport_icons = [];
   }
 
   // Amenities (servicios) desde field_amenities
@@ -591,19 +604,22 @@ const createField = async fieldData => {
     const newField = fieldResult.rows[0];
     const fieldId = newField.id;
 
-    // 2. Insertar TODOS los deportes en field_sports
-    if (sport_ids && sport_ids.length > 0) {
-      for (const sportId of sport_ids) {
-        try {
-          await client.query(
-            `INSERT INTO field_sports (field_id, sport_id, user_id_registration, date_time_registration)
-             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
-            [fieldId, sportId, user_id_registration]
-          );
-        } catch (sportError) {
-          console.warn(`Error al asociar deporte ${sportId}:`, sportError.message);
-        }
-      }
+    // 2. Insertar TODOS los deportes en field_sports.
+    //    Una cancha debe tener al menos un deporte. Si por algún motivo llega
+    //    el array vacío al modelo, abortar la transacción (defensa en profundidad
+    //    — la validación principal está en el controller).
+    if (!Array.isArray(sport_ids) || sport_ids.length === 0) {
+      await client.query('ROLLBACK');
+      throw new Error('Una cancha debe tener al menos un deporte configurado');
+    }
+
+    for (const sportId of sport_ids) {
+      // Si algún INSERT falla, propagar para que la transacción haga ROLLBACK.
+      await client.query(
+        `INSERT INTO field_sports (field_id, sport_id, user_id_registration, date_time_registration)
+         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
+        [fieldId, sportId, user_id_registration]
+      );
     }
 
     // 3. Insertar dimensiones en field_dimensions (si se proporcionaron)
@@ -676,18 +692,22 @@ const createField = async fieldData => {
     await client.query('COMMIT');
 
     // ✅ CORRECCIÓN: Obtener los deportes insertados para retornarlos con la cancha
-    // Esto asegura que la respuesta de creación incluya sport_ids y sport_names
+    // Esto asegura que la respuesta de creación incluya sport_ids, sport_names e iconos.
+    // Filtra deportes inactivos para mantener consistencia con el resto de getters.
     const sportsQuery = `
-      SELECT fs.sport_id, st.name AS sport_name
+      SELECT fs.sport_id, st.name AS sport_name, st.icon AS sport_icon
       FROM field_sports fs
       INNER JOIN sport_types st ON fs.sport_id = st.id
       WHERE fs.field_id = $1
+        AND st.is_active = true
+        AND st.status = 'active'
       ORDER BY st.name
     `;
     const sportsResult = await pool.query(sportsQuery, [fieldId]);
 
     newField.sport_ids = sportsResult.rows.map(row => row.sport_id);
     newField.sport_names = sportsResult.rows.map(row => row.sport_name);
+    newField.sport_icons = sportsResult.rows.map(row => row.sport_icon);
 
     // Obtener amenities insertados
     const amenitiesQuery = `SELECT amenity FROM field_amenities WHERE field_id = $1`;
@@ -814,22 +834,28 @@ const updateField = async (id, fieldData) => {
       return null;
     }
 
-    // 2. Actualizar deportes en field_sports (si se enviaron sport_ids)
-    if (sport_ids && sport_ids.length > 0) {
-      // Eliminar deportes anteriores
+    // 2. Actualizar deportes en field_sports.
+    //    Una cancha debe tener al menos un deporte configurado. Si llega un
+    //    array vacío explícito, abortar la transacción para no dejar la cancha
+    //    sin deportes (la validación principal está en el controller; esto es
+    //    defensa en profundidad para callers internos).
+    if (Array.isArray(sport_ids)) {
+      if (sport_ids.length === 0) {
+        await client.query('ROLLBACK');
+        throw new Error('Una cancha debe tener al menos un deporte configurado');
+      }
+
+      // Eliminar deportes anteriores e insertar los nuevos. Si algún INSERT
+      // falla, propagar el error para que la transacción haga ROLLBACK y la
+      // cancha no quede en estado inconsistente.
       await client.query('DELETE FROM field_sports WHERE field_id = $1', [id]);
 
-      // Insertar los nuevos deportes
       for (const sportId of sport_ids) {
-        try {
-          await client.query(
-            `INSERT INTO field_sports (field_id, sport_id, user_id_registration, date_time_registration)
-             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
-            [id, sportId, user_id_modification]
-          );
-        } catch (sportError) {
-          console.warn(`Error al asociar deporte ${sportId}:`, sportError.message);
-        }
+        await client.query(
+          `INSERT INTO field_sports (field_id, sport_id, user_id_registration, date_time_registration)
+           VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
+          [id, sportId, user_id_modification]
+        );
       }
     }
 
@@ -1072,7 +1098,8 @@ const getFieldConfig = async fieldId => {
   const client = await pool.connect();
   try {
     // Obtener información básica del campo (incluyendo status para actualización en tiempo real)
-    const fieldQuery = 'SELECT field_type, capacity, is_active, status FROM fields WHERE id = $1';
+    const fieldQuery =
+      'SELECT field_type, capacity, is_active, status, requires_manual_confirmation FROM fields WHERE id = $1';
     const fieldResult = await client.query(fieldQuery, [fieldId]);
 
     if (fieldResult.rows.length === 0) {
@@ -1092,9 +1119,15 @@ const getFieldConfig = async fieldId => {
       "SELECT id, rule as rule_text, 'general' as category, 0 as priority FROM field_rules WHERE field_id = $1";
     const rulesResult = await client.query(rulesQuery, [fieldId]);
 
-    // Obtener mantenimiento
+    // Obtener mantenimiento.
+    // COALESCE protege ante filas legacy creadas antes de la migración
+    // 20260511000001_add_maintenance_type_to_field_maintenance_schedules:
+    // si por algún motivo la columna fuera NULL, se devuelve el mismo default
+    // que se usa al crear nuevos items en el frontend ('scheduled').
     const maintenanceQuery = `
-      SELECT id, start_date, end_date, reason, 'general' as maintenance_type, 'scheduled' as status
+      SELECT id, start_date, end_date, reason,
+             COALESCE(maintenance_type, 'scheduled') as maintenance_type,
+             'scheduled' as status
       FROM field_maintenance_schedules
       WHERE field_id = $1
       ORDER BY start_date DESC
@@ -1216,13 +1249,15 @@ const updateFieldConfig = async (fieldId, configData, userId) => {
          SET field_type = COALESCE($1, field_type),
              capacity = COALESCE($2, capacity),
              is_active = COALESCE($3, is_active),
-             user_id_modification = $4,
+             requires_manual_confirmation = COALESCE($4, requires_manual_confirmation),
+             user_id_modification = $5,
              date_time_modification = CURRENT_TIMESTAMP
-         WHERE id = $5`,
+         WHERE id = $6`,
         [
           configData.field.field_type,
           configData.field.capacity,
           configData.field.is_active,
+          configData.field.requires_manual_confirmation,
           userId,
           fieldId,
         ]
@@ -1288,16 +1323,19 @@ const updateFieldConfig = async (fieldId, configData, userId) => {
       // Eliminar mantenimientos existentes
       await client.query('DELETE FROM field_maintenance_schedules WHERE field_id = $1', [fieldId]);
 
-      // Insertar nuevos mantenimientos
+      // Insertar nuevos mantenimientos.
+      // Persistir maintenance_type (Programado / Emergencia / Mejora) para que
+      // el select del frontend conserve el valor elegido al recargar la config.
       for (const maintenance of configData.maintenanceSchedules) {
         await client.query(
-          `INSERT INTO field_maintenance_schedules (field_id, start_date, end_date, reason, user_id_registration)
-           VALUES ($1, $2, $3, $4, $5)`,
+          `INSERT INTO field_maintenance_schedules (field_id, start_date, end_date, reason, maintenance_type, user_id_registration)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
           [
             fieldId,
             maintenance.start_date,
             maintenance.end_date,
             maintenance.reason || maintenance.description || '',
+            maintenance.maintenance_type || 'scheduled',
             userId,
           ]
         );
@@ -1316,14 +1354,19 @@ const updateFieldConfig = async (fieldId, configData, userId) => {
       const activeMaintenanceResult = await client.query(activeMaintenanceQuery, [fieldId, today]);
       const hasActiveMaintenance = parseInt(activeMaintenanceResult.rows[0].count) > 0;
 
-      // Si hay mantenimiento activo, cambiar estado a 'maintenance', sino a 'available'
+      // Si hay mantenimiento activo HOY, cambiar a 'maintenance'; sino a 'available'.
+      // Solo se reescribe si el status actual es 'available' o 'maintenance';
+      // estados administrativos ('closed', 'inactive', 'pending', 'rejected',
+      // 'unavailable', 'deleted') NO deben tocarse — debe coincidir con la lógica
+      // de getAllFields (status efectivo) y el cron updateFieldMaintenanceStatus.
       const newStatus = hasActiveMaintenance ? 'maintenance' : 'available';
       await client.query(
         `UPDATE fields
          SET status = $1,
              user_id_modification = $2,
              date_time_modification = CURRENT_TIMESTAMP
-         WHERE id = $3`,
+         WHERE id = $3
+           AND status IN ('available', 'maintenance')`,
         [newStatus, userId, fieldId]
       );
     }

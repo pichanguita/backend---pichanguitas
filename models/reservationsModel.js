@@ -52,6 +52,7 @@ const getAllReservations = async (filters = {}) => {
       r.approved_at,
       r.rejected_by,
       r.rejected_at,
+      r.sport_type,
       f.name AS field_name,
       f.admin_id AS field_admin_id,
       c.name AS customer_name,
@@ -180,6 +181,7 @@ const getReservationById = async id => {
       r.no_show_date,
       r.user_id_registration,
       r.date_time_registration,
+      r.sport_type,
       f.name AS field_name,
       f.address AS field_address,
       f.phone AS field_phone,
@@ -234,6 +236,7 @@ const createReservation = async reservationData => {
     coupon_discount = 0,
     free_hours_used = 0,
     free_hours_discount = 0,
+    sport_type = null,
     user_id_registration,
   } = reservationData;
 
@@ -332,9 +335,10 @@ const createReservation = async reservationData => {
         coupon_discount,
         free_hours_used,
         free_hours_discount,
+        sport_type,
         user_id_registration,
         date_time_registration
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, CURRENT_TIMESTAMP)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, CURRENT_TIMESTAMP)
       RETURNING *
     `;
 
@@ -359,6 +363,7 @@ const createReservation = async reservationData => {
       coupon_discount,
       actualFreeHoursUsed,
       actualFreeHoursDiscount,
+      sport_type,
       user_id_registration,
     ]);
 

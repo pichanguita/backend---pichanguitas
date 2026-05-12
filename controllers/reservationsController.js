@@ -138,6 +138,7 @@ const createNewReservation = async (req, res) => {
       coupon_discount,
       free_hours_used,
       free_hours_discount,
+      sport_type, // Deporte elegido por el cliente para esta reserva (canchas multi-deporte)
       user_id, // ID del usuario autenticado (si aplica)
       // ✅ phone_number no se usa - viene de la tabla customers
     } = req.body;
@@ -232,7 +233,16 @@ const createNewReservation = async (req, res) => {
     let calculatedAdvancePayment = 0;
     let calculatedRemainingPayment = parseFloat(total_price) || 0;
 
-    if (fieldRequiresAdvance && !isCashPayment && total_price > 0) {
+    // Si el pago se marca como completo (admin cobró todo al momento de la reserva),
+    // forzar consistencia: adelanto = total, saldo = 0. Aplica antes que las reglas
+    // de adelanto-por-hora porque "pagado completo" es un estado terminal.
+    const isFullyPaidStatus = payment_status === 'paid' || payment_status === 'fully_paid';
+
+    if (isFullyPaidStatus) {
+      calculatedAdvancePayment = parseFloat(total_price) || 0;
+      calculatedRemainingPayment = 0;
+      console.log('✅ [PAGADO] Reserva marcada como pagada al crear - advance = total, remaining = 0');
+    } else if (fieldRequiresAdvance && !isCashPayment && total_price > 0) {
       // Cancha requiere adelanto Y cliente NO paga efectivo
       // Adelanto = adelanto por hora * horas (sin exceder el total)
       calculatedAdvancePayment = Math.min(calculatedAdvanceTotal, parseFloat(total_price) || 0);
@@ -437,6 +447,7 @@ const createNewReservation = async (req, res) => {
       coupon_discount,
       free_hours_used: free_hours_used || 0,
       free_hours_discount: free_hours_discount || 0,
+      sport_type: sport_type ?? null,
       // ✅ phone_number NO va en reservations, está en customers
       user_id_registration: req.user?.id || field.admin_id || 1,
     };
@@ -991,11 +1002,14 @@ const markReservationAsNoShow = async (req, res) => {
     if (shouldRefund && refundAmount > 0) {
       const { createRefund } = require('../models/refundsModel');
 
+      // getReservationById expone el teléfono como customer_phone (alias del JOIN
+      // a customers.phone_number). Usar el alias correcto evita un INSERT con
+      // phone_number=undefined que viola el NOT NULL de refunds.phone_number.
       refundCreated = await createRefund({
         reservation_id: parseInt(id),
         customer_id: existingReservation.customer_id,
-        customer_name: existingReservation.customer_name,
-        phone_number: existingReservation.phone_number,
+        customer_name: existingReservation.customer_name || 'N/A',
+        phone_number: existingReservation.customer_phone || 'N/A',
         field_id: existingReservation.field_id,
         refund_amount: refundAmount,
         status: 'pending',

@@ -128,10 +128,17 @@ const transformFieldToCamelCase = field => {
     status: field.status,
     approvalStatus: field.approval_status,
     fieldType: field.field_type,
-    sportType: field.sport_type,
+    // sportType (legacy singular): sólo se expone si el id está entre los
+    // sport_ids ya filtrados por el catálogo activo. Esto evita exponer al FE
+    // un id de un deporte soft-deleted (que rompía la edición de canchas).
+    sportType:
+      field.sport_type && Array.isArray(field.sport_ids) && field.sport_ids.includes(field.sport_type)
+        ? field.sport_type
+        : null,
     capacity: parseInt(field.capacity) || null,
     requiresAdvancePayment: field.requires_advance_payment,
     advancePaymentAmount: parseFloat(field.advance_payment_amount) || 0,
+    requiresManualConfirmation: field.requires_manual_confirmation ?? false,
     isActive: field.is_active,
     isMultiSport: field.is_multi_sport,
     rating: parseFloat(field.rating) || 0,
@@ -158,16 +165,17 @@ const transformFieldToCamelCase = field => {
       field.latitude && field.longitude
         ? [parseFloat(field.latitude), parseFloat(field.longitude)]
         : null,
-    // sportTypes contiene los IDs numéricos de TODOS los deportes (desde field_sports)
-    // Si hay sport_ids de field_sports, usarlos; sino, usar sport_type como fallback
-    sportTypes:
-      field.sport_ids && field.sport_ids.length > 0
-        ? field.sport_ids
-        : field.sport_type
-          ? [parseInt(field.sport_type)]
-          : [],
+    // sportTypes contiene los IDs numéricos de los deportes ACTIVOS asociados
+    // a la cancha (desde field_sports filtrado por st.is_active=true).
+    // No se cae al campo legacy `sport_type` porque éste puede apuntar a un
+    // deporte soft-deleted, lo que llevaría a exponer al frontend deportes
+    // eliminados. Si el array filtrado está vacío, sportTypes también lo está.
+    sportTypes: field.sport_ids && field.sport_ids.length > 0 ? field.sport_ids : [],
     // Nombres de los deportes (para mostrar en UI)
     sportNames: field.sport_names || [],
+    // Iconos paralelos a sportNames. Permite renderizar el icono correcto
+    // sin depender del catálogo de sport_types (que filtra inactivos).
+    sportIcons: field.sport_icons || [],
     // Imágenes de la cancha
     images: field.images || [],
     // Amenities/Servicios (array de strings)
@@ -290,6 +298,9 @@ const transformReservationToCamelCase = reservation => {
     approvedAt: reservation.approved_at,
     rejectedBy: reservation.rejected_by,
     rejectedAt: reservation.rejected_at,
+    // ✅ Deporte elegido para esta reserva (relevante en canchas multi-deporte)
+    sportType: reservation.sport_type,
+    sport_type: reservation.sport_type,
     // ✅ Campos de reembolso (si existe)
     refundId: reservation.refund_id,
     refund_id: reservation.refund_id, // Mantener snake_case

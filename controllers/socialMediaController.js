@@ -94,7 +94,10 @@ const getSocialMediaById = async (req, res) => {
 
 /**
  * POST /api/social-media
- * Crear una nueva red social
+ * Crear una nueva red social (idempotente).
+ * Si ya existe una red activa con el mismo (platform, url), devuelve la existente
+ * en lugar de insertar un duplicado. Protege contra doble-clicks en el botón
+ * "Guardar" y reintentos de red.
  */
 const createSocialMedia = async (req, res) => {
   try {
@@ -106,6 +109,25 @@ const createSocialMedia = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'El nombre de la plataforma es requerido',
+      });
+    }
+
+    // Idempotencia: si ya existe una red activa con misma plataforma y URL, devolverla.
+    const existingResult = await pool.query(
+      `SELECT id, platform, url, icon, color, is_phone, enabled, order_index, status, date_time_registration
+       FROM social_media
+       WHERE status = 'active'
+         AND LOWER(TRIM(platform)) = LOWER(TRIM($1))
+         AND LOWER(TRIM(COALESCE(url, ''))) = LOWER(TRIM(COALESCE($2, '')))
+       LIMIT 1`,
+      [platform, url || '']
+    );
+
+    if (existingResult.rows.length > 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'La red social ya existía',
+        data: existingResult.rows[0],
       });
     }
 

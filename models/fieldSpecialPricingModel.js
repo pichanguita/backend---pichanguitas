@@ -16,15 +16,48 @@ const slotIdToTime = slotId => {
 };
 
 /**
- * Verifica si una hora cae dentro de alguno de los rangos de tiempo JSONB
- * Si no hay rangos definidos, aplica a todas las horas
- * @param {string} timeStr - Hora en formato HH:00
- * @param {Array|null} timeRanges - Array de {start, end}
+ * Verifica si un slot cae dentro de alguno de los rangos de tiempo JSONB
+ *
+ * La columna time_ranges puede contener dos formatos (por compatibilidad):
+ *  1) Array de IDs de slots (formato actual): ['6am', '7am', '12pm', ...]
+ *  2) Array de rangos {start, end} (formato legacy): [{start:'06:00', end:'12:00'}, ...]
+ * Si está vacío/null, aplica a TODAS las horas.
+ *
+ * @param {string} slotId - ID del slot (ej: '6am')
+ * @param {string} timeStr - Hora del slot en formato 'HH:00' (derivada de slotId)
+ * @param {Array|null} timeRanges - Array en cualquiera de los dos formatos
  * @returns {boolean}
+ */
+const slotMatchesTimeRanges = (slotId, timeStr, timeRanges) => {
+  if (!timeRanges || !Array.isArray(timeRanges) || timeRanges.length === 0) return true;
+
+  for (const range of timeRanges) {
+    if (typeof range === 'string') {
+      // Formato actual: array de IDs de slot
+      if (range === slotId) return true;
+    } else if (range && typeof range === 'object' && range.start && range.end) {
+      // Formato legacy: { start: 'HH:MM', end: 'HH:MM' }
+      if (timeStr && timeStr >= range.start && timeStr < range.end) return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * Wrapper retrocompatible que sólo recibe la hora (legacy callers).
+ * Devuelve `true` si los rangos están vacíos o si hay match por {start,end}.
+ * Para callers nuevos preferir `slotMatchesTimeRanges(slotId, timeStr, ...)`.
  */
 const isTimeInRanges = (timeStr, timeRanges) => {
   if (!timeRanges || !Array.isArray(timeRanges) || timeRanges.length === 0) return true;
-  return timeRanges.some(r => timeStr >= r.start && timeStr < r.end);
+  return timeRanges.some(r => {
+    if (typeof r === 'string') {
+      // Compara hora HH:00 contra el ID convertido a HH:00
+      const rTime = slotIdToTime(r);
+      return rTime !== null && rTime === timeStr;
+    }
+    return r && r.start && r.end && timeStr >= r.start && timeStr < r.end;
+  });
 };
 
 /**
@@ -348,13 +381,16 @@ const getApplicableSpecialPricingForSlots = async (field_id, day, slotIds) => {
     return {};
   }
 
-  // Obtener todos los precios especiales activos que aplican al dia
+  // Obtener todos los precios especiales activos que aplican al dia.
+  // IMPORTANTE: incluir discount_type (la BD almacena 'percentage' | 'amount').
+  // Hardcodear 'percentage' rompe la validación cuando el admin guarda monto fijo.
   const query = `
     SELECT
       fsp.id,
       fsp.name,
       fsp.description,
       fsp.price,
+      fsp.discount_type,
       fsp.time_ranges,
       fsp.days
     FROM field_special_pricing fsp
@@ -368,14 +404,15 @@ const getApplicableSpecialPricingForSlots = async (field_id, day, slotIds) => {
   const result = await pool.query(query, [field_id, day.toLowerCase()]);
   const pricings = result.rows;
 
-  // Para cada slot, encontrar el precio especial aplicable
+  // Para cada slot, encontrar el precio especial aplicable.
+  // time_ranges en BD se guarda como array de IDs de slot (['6am','7am']) — el matcher
+  // soporta también el formato legacy {start,end} por retro-compatibilidad.
   const pricingMap = {};
   for (const slotId of slotIds) {
     const timeStr = slotIdToTime(slotId);
     if (!timeStr) continue;
 
-    // Buscar el primer pricing cuyo time_ranges incluya esta hora (o que no tenga rangos = aplica a todos)
-    const applicable = pricings.find(p => isTimeInRanges(timeStr, p.time_ranges));
+    const applicable = pricings.find(p => slotMatchesTimeRanges(slotId, timeStr, p.time_ranges));
 
     if (applicable) {
       pricingMap[slotId] = {
@@ -383,7 +420,7 @@ const getApplicableSpecialPricingForSlots = async (field_id, day, slotIds) => {
         name: applicable.name,
         description: applicable.description,
         discountValue: parseFloat(applicable.price) || 0,
-        discountType: 'percentage',
+        discountType: applicable.discount_type || 'percentage',
       };
     }
   }

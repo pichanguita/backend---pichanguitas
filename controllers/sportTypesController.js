@@ -104,6 +104,12 @@ const createNewSportType = async (req, res) => {
       data: newSportType,
     });
   } catch (error) {
+    if (error?.code === '23505') {
+      return res.status(409).json({
+        success: false,
+        error: 'Ya existe un deporte con ese nombre',
+      });
+    }
     console.error('Error al crear tipo de deporte:', error);
     res.status(500).json({
       success: false,
@@ -158,6 +164,12 @@ const updateExistingSportType = async (req, res) => {
       data: updatedSportType,
     });
   } catch (error) {
+    if (error?.code === '23505') {
+      return res.status(409).json({
+        success: false,
+        error: 'Ya existe un deporte con ese nombre',
+      });
+    }
     console.error('Error al actualizar tipo de deporte:', error);
     res.status(500).json({
       success: false,

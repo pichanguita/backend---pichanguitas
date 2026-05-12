@@ -53,6 +53,7 @@ const getMonthlyPaymentStatus = async (filters = {}) => {
     LEFT JOIN users reported_user ON mp.reported_by = reported_user.id
     LEFT JOIN users confirmed_user ON mp.confirmed_by = confirmed_user.id
     WHERE pc.is_active = true
+      AND f.approval_status <> 'rejected'
       AND pc.effective_from <= MAKE_DATE($2::int, $1::int, pc.due_day)
   `;
 
@@ -124,7 +125,7 @@ const getPaymentHistory = async (filters = {}) => {
     JOIN users u ON mp.admin_id = u.id
     LEFT JOIN users reported_user ON mp.reported_by = reported_user.id
     LEFT JOIN users confirmed_user ON mp.confirmed_by = confirmed_user.id
-    WHERE 1=1
+    WHERE (f.approval_status <> 'rejected' OR mp.status = 'paid')
   `;
 
   const params = [];
@@ -442,6 +443,7 @@ const getAdminCurrentPaymentStatus = async adminId => {
     LEFT JOIN monthly_payments mp ON mp.field_id = pc.field_id
       AND mp.month = $1 AND mp.year = $2
     WHERE pc.admin_id = $3 AND pc.is_active = true
+      AND f.approval_status <> 'rejected'
       AND pc.effective_from <= MAKE_DATE($2::int, $1::int, pc.due_day)
     ORDER BY f.name
   `,
@@ -512,6 +514,7 @@ const generateMonthlyPayments = async (month, year, userId) => {
     JOIN fields f ON pc.field_id = f.id
     JOIN users u ON pc.admin_id = u.id
     WHERE pc.is_active = true
+      AND f.approval_status <> 'rejected'
     ORDER BY u.name, f.name
   `);
 
@@ -610,7 +613,9 @@ const getMonthlyStats = async (month, year) => {
   const configsResult = await pool.query(`
     SELECT pc.id, pc.field_id, pc.monthly_fee, pc.due_day, pc.effective_from
     FROM payment_configs pc
+    JOIN fields f ON pc.field_id = f.id
     WHERE pc.is_active = true
+      AND f.approval_status <> 'rejected'
       AND pc.effective_from <= MAKE_DATE($1::int, $2::int, pc.due_day)
   `, [year, month]);
 

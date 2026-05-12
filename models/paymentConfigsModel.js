@@ -25,7 +25,7 @@ const getAllPaymentConfigs = async (filters = {}) => {
     FROM payment_configs pc
     LEFT JOIN fields f ON pc.field_id = f.id
     LEFT JOIN users u ON pc.admin_id = u.id
-    WHERE 1=1
+    WHERE (f.approval_status IS NULL OR f.approval_status <> 'rejected')
   `;
 
   const params = [];

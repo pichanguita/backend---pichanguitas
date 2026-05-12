@@ -193,19 +193,28 @@ async function main() {
   // ========================================
   // 6. SPORT TYPES
   // ========================================
+  // Idempotente sin depender de UNIQUE global: solo se crea si no hay un
+  // deporte ACTIVO con el mismo nombre. Convive con filas soft-deleted
+  // (status='inactive') que pudieran existir en producción.
   console.log('Poblando tipos de deportes...');
-  await prisma.sport_types.createMany({
-    data: [
-      { name: 'Futbol', icon: '⚽', color: '#22c55e', description: 'Futbol en canchas de grass sintetico o natural', is_active: true, status: 'active' },
-      { name: 'Futbol 5', icon: '⚽', color: '#16a34a', description: 'Futbol en canchas pequenas de 5 jugadores', is_active: true, status: 'active' },
-      { name: 'Futbol 7', icon: '⚽', color: '#15803d', description: 'Futbol en canchas medianas de 7 jugadores', is_active: true, status: 'active' },
-      { name: 'Basquet', icon: '🏀', color: '#f97316', description: 'Baloncesto en canchas techadas o al aire libre', is_active: true, status: 'active' },
-      { name: 'Voley', icon: '🏐', color: '#3b82f6', description: 'Voleibol en canchas con net reglamentario', is_active: true, status: 'active' },
-      { name: 'Tenis', icon: '🎾', color: '#eab308', description: 'Tenis en canchas especializadas', is_active: true, status: 'active' },
-      { name: 'Padel', icon: '🎾', color: '#a855f7', description: 'Padel en canchas cerradas', is_active: true, status: 'active' },
-    ],
-    skipDuplicates: true,
-  });
+  const seedSportTypes = [
+    { name: 'Futbol', icon: '⚽', color: '#22c55e', description: 'Futbol en canchas de grass sintetico o natural', is_active: true, status: 'active' },
+    { name: 'Futbol 5', icon: '⚽', color: '#16a34a', description: 'Futbol en canchas pequenas de 5 jugadores', is_active: true, status: 'active' },
+    { name: 'Futbol 7', icon: '⚽', color: '#15803d', description: 'Futbol en canchas medianas de 7 jugadores', is_active: true, status: 'active' },
+    { name: 'Basquet', icon: '🏀', color: '#f97316', description: 'Baloncesto en canchas techadas o al aire libre', is_active: true, status: 'active' },
+    { name: 'Voley', icon: '🏐', color: '#3b82f6', description: 'Voleibol en canchas con net reglamentario', is_active: true, status: 'active' },
+    { name: 'Tenis', icon: '🎾', color: '#eab308', description: 'Tenis en canchas especializadas', is_active: true, status: 'active' },
+    { name: 'Padel', icon: '🎾', color: '#a855f7', description: 'Padel en canchas cerradas', is_active: true, status: 'active' },
+  ];
+  for (const sport of seedSportTypes) {
+    const existing = await prisma.sport_types.findFirst({
+      where: { name: { equals: sport.name, mode: 'insensitive' }, status: 'active' },
+      select: { id: true },
+    });
+    if (!existing) {
+      await prisma.sport_types.create({ data: sport });
+    }
+  }
 
   // ========================================
   // 7. TIME RANGES

@@ -181,13 +181,15 @@ const countFieldsBySportType = async sportTypeId => {
 };
 
 /**
- * Verificar si un nombre de deporte ya existe
+ * Verificar si un nombre de deporte ya existe entre los deportes ACTIVOS.
+ * Las filas soft-deleted (status='inactive') no se consideran, alineado con
+ * el índice parcial sport_types_active_name_uk a nivel BD.
  * @param {string} name - Nombre del deporte
  * @param {number|null} excludeId - ID a excluir de la búsqueda (para updates)
- * @returns {Promise<boolean>} True si existe
+ * @returns {Promise<boolean>} True si existe un activo con ese nombre
  */
 const sportTypeNameExists = async (name, excludeId = null) => {
-  let query = `SELECT id FROM sport_types WHERE LOWER(name) = LOWER($1)`;
+  let query = `SELECT id FROM sport_types WHERE LOWER(name) = LOWER($1) AND status = 'active'`;
   const params = [name];
 
   if (excludeId) {

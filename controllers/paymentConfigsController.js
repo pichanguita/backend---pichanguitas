@@ -7,6 +7,7 @@ const {
   updatePaymentConfigByFieldId,
   deletePaymentConfig,
 } = require('../models/paymentConfigsModel');
+const pool = require('../config/db');
 
 /**
  * Obtener todas las configuraciones de pago
@@ -124,6 +125,29 @@ const upsertPaymentConfig = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'El día de vencimiento debe estar entre 1 y 28',
+      });
+    }
+
+    // Solo se permite configurar mensualidad para canchas aprobadas y operativas.
+    const fieldCheck = await pool.query(
+      'SELECT id, approval_status FROM fields WHERE id = $1',
+      [field_id]
+    );
+    if (fieldCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cancha no encontrada',
+      });
+    }
+    const approvalStatus = fieldCheck.rows[0].approval_status;
+    if (approvalStatus !== 'approved') {
+      const reason =
+        approvalStatus === 'rejected'
+          ? 'No se puede configurar mensualidad para una cancha rechazada'
+          : 'Solo se puede configurar mensualidad para canchas aprobadas';
+      return res.status(400).json({
+        success: false,
+        error: reason,
       });
     }
 

@@ -73,6 +73,7 @@ const login = async (req, res) => {
     });
 
     // Generar token JWT
+    // La duración se controla por env (JWT_EXPIRES_IN). Default 8h.
     const token = jwt.sign(
       {
         id: user.id,
@@ -82,7 +83,7 @@ const login = async (req, res) => {
         adminType: user.admin_type,
       },
       process.env.JWT_SECRET,
-      { expiresIn: '4h' }
+      { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
     );
 
     // Excluir password_hash de la respuesta

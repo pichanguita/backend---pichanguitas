@@ -5,13 +5,10 @@ const promotionLogger = require('../services/promotionLogger');
  * Cláusula SQL reutilizable que define qué reservas cuentan como "horas jugadas"
  * para promociones, badges y cálculo de progreso del cliente.
  *
- * Una reserva cuenta cuando:
- * - NO está cancelada ni marcada como no_show.
- * - La hora de inicio del evento ya pasó (zona horaria de servidor).
- *
- * Aceptar reservas `confirmed` con fecha pasada es necesario porque la transición
- * a `completed` depende de que un admin presione "Completar" manualmente, lo que
- * dejaría el progreso del cliente bloqueado en 0% si el admin no actúa.
+ * Una reserva cuenta SOLO cuando está completada (status = 'completed').
+ * Esto significa: pago confirmado + evento ocurrido + admin la marcó como
+ * completada. Cualquier estado anterior (pending, confirmed) NO suma al
+ * progreso, aunque la fecha del evento haya pasado.
  *
  * Asume que el alias de la tabla reservations es 'r'. Si la query usa otro alias
  * (o sin alias), pasarlo como argumento.
@@ -21,13 +18,7 @@ const promotionLogger = require('../services/promotionLogger');
  */
 const playedReservationClause = (alias = '') => {
   const prefix = alias ? `${alias}.` : '';
-  return `
-    ${prefix}status NOT IN ('cancelled', 'no_show')
-    AND (
-      ${prefix}status = 'completed'
-      OR (${prefix}date + COALESCE(${prefix}start_time, '00:00'::time)) < NOW()
-    )
-  `;
+  return `${prefix}status = 'completed'`;
 };
 
 /**
@@ -98,6 +89,14 @@ const getAllPromotionRules = async (filters = {}) => {
   if (filters.search) {
     query += ` AND pr.name ILIKE $${paramCount}`;
     params.push(`%${filters.search}%`);
+    paramCount++;
+  }
+
+  // Filtro por creador (admin de cancha solo ve sus propias reglas).
+  // El controlador lo inyecta cuando req.user.id_rol === 2; super_admin no lo pasa.
+  if (filters.created_by) {
+    query += ` AND pr.created_by = $${paramCount}`;
+    params.push(filters.created_by);
     paramCount++;
   }
 
@@ -419,7 +418,7 @@ const promotionRuleNameExists = async (name, excludeId = null) => {
  * @param {number|null} excludeRuleId - ID de regla a excluir (para edición)
  * @returns {Promise<Array>} Lista de canchas con sus reglas activas asociadas
  */
-const getFieldsWithActiveRules = async (excludeRuleId = null) => {
+const getFieldsWithActiveRules = async (excludeRuleId = null, createdBy = null) => {
   let query = `
     SELECT
       prf.field_id,
@@ -433,10 +432,18 @@ const getFieldsWithActiveRules = async (excludeRuleId = null) => {
   `;
 
   const params = [];
+  let paramCount = 1;
 
   if (excludeRuleId) {
-    query += ` AND pr.id != $1`;
+    query += ` AND pr.id != $${paramCount}`;
     params.push(excludeRuleId);
+    paramCount++;
+  }
+
+  if (createdBy) {
+    query += ` AND pr.created_by = $${paramCount}`;
+    params.push(createdBy);
+    paramCount++;
   }
 
   query += ` ORDER BY f.name`;
@@ -451,7 +458,7 @@ const getFieldsWithActiveRules = async (excludeRuleId = null) => {
  * @param {number|null} excludeRuleId - ID de regla a excluir (para edición)
  * @returns {Promise<Array>} Lista de canchas que ya tienen regla activa
  */
-const checkFieldsWithExistingRules = async (fieldIds, excludeRuleId = null) => {
+const checkFieldsWithExistingRules = async (fieldIds, excludeRuleId = null, createdBy = null) => {
   if (!fieldIds || fieldIds.length === 0) return [];
 
   let query = `
@@ -469,10 +476,18 @@ const checkFieldsWithExistingRules = async (fieldIds, excludeRuleId = null) => {
   `;
 
   const params = [fieldIds];
+  let paramCount = 2;
 
   if (excludeRuleId) {
-    query += ` AND pr.id != $2`;
+    query += ` AND pr.id != $${paramCount}`;
     params.push(excludeRuleId);
+    paramCount++;
+  }
+
+  if (createdBy) {
+    query += ` AND pr.created_by = $${paramCount}`;
+    params.push(createdBy);
+    paramCount++;
   }
 
   const result = await pool.query(query, params);
@@ -484,7 +499,7 @@ const checkFieldsWithExistingRules = async (fieldIds, excludeRuleId = null) => {
  * @param {number|null} excludeRuleId - ID de regla a excluir (para edición)
  * @returns {Promise<Object|null>} Regla encontrada o null
  */
-const checkGlobalRuleExists = async (excludeRuleId = null) => {
+const checkGlobalRuleExists = async (excludeRuleId = null, createdBy = null) => {
   let query = `
     SELECT id, name
     FROM promotion_rules
@@ -494,10 +509,18 @@ const checkGlobalRuleExists = async (excludeRuleId = null) => {
   `;
 
   const params = [];
+  let paramCount = 1;
 
   if (excludeRuleId) {
-    query += ` AND id != $1`;
+    query += ` AND id != $${paramCount}`;
     params.push(excludeRuleId);
+    paramCount++;
+  }
+
+  if (createdBy) {
+    query += ` AND created_by = $${paramCount}`;
+    params.push(createdBy);
+    paramCount++;
   }
 
   query += ` LIMIT 1`;
@@ -512,9 +535,9 @@ const checkGlobalRuleExists = async (excludeRuleId = null) => {
  * @param {number|null} excludeRuleId - ID de regla a excluir (para edición)
  * @returns {Promise<Object>} Objeto con información de conflictos
  */
-const checkAnyActiveRuleExists = async (excludeRuleId = null) => {
+const checkAnyActiveRuleExists = async (excludeRuleId = null, createdBy = null) => {
   // Verificar si hay regla global
-  const globalRule = await checkGlobalRuleExists(excludeRuleId);
+  const globalRule = await checkGlobalRuleExists(excludeRuleId, createdBy);
 
   if (globalRule) {
     return {
@@ -538,10 +561,18 @@ const checkAnyActiveRuleExists = async (excludeRuleId = null) => {
   `;
 
   const params = [];
+  let paramCount = 1;
 
   if (excludeRuleId) {
-    query += ` AND pr.id != $1`;
+    query += ` AND pr.id != $${paramCount}`;
     params.push(excludeRuleId);
+    paramCount++;
+  }
+
+  if (createdBy) {
+    query += ` AND pr.created_by = $${paramCount}`;
+    params.push(createdBy);
+    paramCount++;
   }
 
   query += ` GROUP BY pr.id, pr.name`;
@@ -587,8 +618,8 @@ const getApplicablePromotionRule = async (hours, applies_to = 'all') => {
  * Obtener estadísticas de reglas de promoción
  * @returns {Promise<Object>} Estadísticas
  */
-const getPromotionRuleStats = async () => {
-  const query = `
+const getPromotionRuleStats = async (createdBy = null) => {
+  let query = `
     SELECT
       COUNT(*) AS total_rules,
       COUNT(*) FILTER (WHERE is_active = true) AS active_rules,
@@ -598,7 +629,13 @@ const getPromotionRuleStats = async () => {
     FROM promotion_rules
   `;
 
-  const result = await pool.query(query);
+  const params = [];
+  if (createdBy) {
+    query += ` WHERE created_by = $1`;
+    params.push(createdBy);
+  }
+
+  const result = await pool.query(query, params);
   return result.rows[0];
 };
 
@@ -731,8 +768,9 @@ const getCustomerPromotions = async userId => {
   });
 
   // Calcular progreso para cada promoción.
-  // Modelo one-shot: una promoción se canjea UNA vez por cliente
-  // (constraint UNIQUE en customer_promotion_redemptions).
+  // Modelo multi-shot: cada canje consume hoursRequired del progreso acumulado.
+  // Tras canjear, la barra y el porcentaje "se resetean" porque las horas
+  // jugadas previas ya fueron consumidas y solo cuentan las horas restantes.
   const rulesWithProgress = rules.map(rule => {
     const hoursRequired = parseFloat(rule.hours_required);
     const associatedFields = fieldsByRule[rule.id] || [];
@@ -749,15 +787,13 @@ const getCustomerPromotions = async userId => {
       });
     }
 
-    // Si ya canjeó: progreso 100% y canje deshabilitado.
-    // Si no canjeó: progreso vs horas jugadas reales (capado a 100%).
-    const progressPercent = alreadyRedeemed
-      ? 100
-      : Math.min(100, (hoursPlayed / hoursRequired) * 100);
-    const hoursUntilNext = alreadyRedeemed
-      ? 0
-      : Math.max(0, hoursRequired - hoursPlayed);
-    const canRedeem = !alreadyRedeemed && hoursPlayed >= hoursRequired;
+    // Horas todavía aplicables al PRÓXIMO canje (descontando lo consumido en
+    // canjes previos). Es lo que debe verse en la barra/porcentaje del FE.
+    const hoursAvailable = Math.max(0, hoursPlayed - redemptionInfo.hoursConsumed);
+    const progressPercent =
+      hoursRequired > 0 ? Math.min(100, (hoursAvailable / hoursRequired) * 100) : 0;
+    const hoursUntilNext = Math.max(0, hoursRequired - hoursAvailable);
+    const canRedeem = hoursAvailable >= hoursRequired;
 
     return {
       id: rule.id,
@@ -767,7 +803,7 @@ const getCustomerPromotions = async userId => {
       freeHours: parseFloat(rule.free_hours),
       appliesTo: rule.applies_to,
       fields: associatedFields,
-      currentHours: Math.round(Math.min(hoursPlayed, hoursRequired) * 10) / 10,
+      currentHours: Math.round(Math.min(hoursAvailable, hoursRequired) * 10) / 10,
       progressPercent: Math.round(progressPercent),
       hoursUntilNext: Math.round(hoursUntilNext * 10) / 10,
       canRedeem,
@@ -858,8 +894,8 @@ const redeemPromotion = async (customerId, promotionRuleId, userId) => {
       hoursPlayed = parseFloat(fieldHoursResult.rows[0]?.total_hours) || 0;
     }
 
-    // Modelo one-shot: si ya canjeó esta promoción, error claro (sin INSERT
-    // que choque con UNIQUE).
+    // Modelo multi-shot: contar canjes previos y descontar las horas ya
+    // consumidas por ellos del progreso disponible para este canje.
     const redemptionsResult = await client.query(
       `SELECT COUNT(*) as redemption_count
        FROM customer_promotion_redemptions
@@ -867,13 +903,8 @@ const redeemPromotion = async (customerId, promotionRuleId, userId) => {
       [customerId, promotionRuleId]
     );
     const redemptionCount = parseInt(redemptionsResult.rows[0]?.redemption_count) || 0;
-    if (redemptionCount > 0) {
-      const err = new Error('Ya canjeaste esta promoción anteriormente.');
-      err.code = 'PROMOTION_ALREADY_REDEEMED';
-      throw err;
-    }
-
-    const availableHours = hoursPlayed;
+    const hoursConsumed = redemptionCount * hoursRequired;
+    const availableHours = Math.max(0, hoursPlayed - hoursConsumed);
 
     if (availableHours < hoursRequired) {
       throw new Error(
@@ -961,16 +992,15 @@ const autoRedeemEligiblePromotions = async ({
     const freeHours = parseFloat(rule.free_hours) || 0;
     if (hoursRequired <= 0 || freeHours <= 0) continue;
 
-    // Una promoción se canjea UNA vez por cliente (UNIQUE en BD).
-    // Si ya tiene canje, saltamos para evitar el error de UNIQUE y respetar
-    // el contrato "sin beneficios duplicados".
+    // Multi-shot: contar canjes previos y descontar sus horas consumidas.
     const redRes = await client.query(
       `SELECT COUNT(*)::int AS cnt
        FROM customer_promotion_redemptions
        WHERE customer_id = $1 AND promotion_rule_id = $2`,
       [customerId, rule.id]
     );
-    if ((redRes.rows[0]?.cnt || 0) > 0) continue;
+    const previousRedemptions = redRes.rows[0]?.cnt || 0;
+    const hoursConsumed = previousRedemptions * hoursRequired;
 
     // Horas jugadas según tipo de promoción
     let hoursPlayed = 0;
@@ -997,47 +1027,40 @@ const autoRedeemEligiblePromotions = async ({
       continue;
     }
 
-    if (hoursPlayed < hoursRequired) continue;
+    // ¿Cuántos canjes nuevos tocan según horas restantes?
+    const hoursAvailable = Math.max(0, hoursPlayed - hoursConsumed);
+    const newRedemptions = Math.floor(hoursAvailable / hoursRequired);
+    if (newRedemptions <= 0) continue;
 
-    // Insert único (la UNIQUE de BD garantiza idempotencia ante concurrencia)
-    await client.query(
-      `INSERT INTO customer_promotion_redemptions
-         (customer_id, promotion_rule_id, hours_earned, user_id_registration)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (customer_id, promotion_rule_id) DO NOTHING`,
-      [customerId, rule.id, freeHours, userId]
-    );
+    for (let i = 0; i < newRedemptions; i++) {
+      await client.query(
+        `INSERT INTO customer_promotion_redemptions
+           (customer_id, promotion_rule_id, hours_earned, user_id_registration)
+         VALUES ($1, $2, $3, $4)`,
+        [customerId, rule.id, freeHours, userId]
+      );
 
-    // Verificar que efectivamente se insertó (ON CONFLICT DO NOTHING no inserta
-    // si ya existe una fila concurrente)
-    const insCheck = await client.query(
-      `SELECT 1 FROM customer_promotion_redemptions
-       WHERE customer_id = $1 AND promotion_rule_id = $2`,
-      [customerId, rule.id]
-    );
-    const wasInserted = insCheck.rows.length > 0 && (redRes.rows[0]?.cnt || 0) === 0;
-    if (!wasInserted) continue;
+      redemptions.push({
+        promotionRuleId: rule.id,
+        name: rule.name,
+        hoursEarned: freeHours,
+      });
 
-    redemptions.push({
-      promotionRuleId: rule.id,
-      name: rule.name,
-      hoursEarned: freeHours,
-    });
+      await client.query(
+        `UPDATE customers
+         SET earned_free_hours = COALESCE(earned_free_hours, 0) + $1,
+             available_free_hours = COALESCE(available_free_hours, 0) + $1
+         WHERE id = $2`,
+        [freeHours, customerId]
+      );
 
-    await client.query(
-      `UPDATE customers
-       SET earned_free_hours = COALESCE(earned_free_hours, 0) + $1,
-           available_free_hours = COALESCE(available_free_hours, 0) + $1
-       WHERE id = $2`,
-      [freeHours, customerId]
-    );
-
-    promotionLogger.redemptionAuto({
-      customerId,
-      promotionRuleId: rule.id,
-      hoursEarned: freeHours,
-      triggerReservationId,
-    });
+      promotionLogger.redemptionAuto({
+        customerId,
+        promotionRuleId: rule.id,
+        hoursEarned: freeHours,
+        triggerReservationId,
+      });
+    }
   }
 
   return redemptions;

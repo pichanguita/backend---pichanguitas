@@ -18,8 +18,15 @@ const {
 } = require('../models/promotionRulesModel');
 const pool = require('../config/db');
 
+// id_rol: 1 = super_admin, 2 = admin de cancha, 3 = cliente.
+// Devuelve el id del usuario para filtrar por created_by cuando es admin de
+// cancha (rol 2). super_admin (1) ve todo, por eso retorna null.
+const scopedCreatedBy = req => (req.user?.id_rol === 2 ? req.user?.id : null);
+
 /**
- * Obtener todas las reglas de promoción con filtros
+ * Obtener todas las reglas de promoción con filtros.
+ * Admin de cancha (id_rol=2) solo ve sus propias reglas.
+ * Super admin (id_rol=1) ve todas.
  */
 const getPromotionRules = async (req, res) => {
   try {
@@ -29,6 +36,7 @@ const getPromotionRules = async (req, res) => {
       status: req.query.status,
       applies_to: req.query.applies_to,
       search: req.query.search,
+      created_by: scopedCreatedBy(req),
     };
 
     const rules = await getAllPromotionRules(filters);
@@ -55,7 +63,10 @@ const getPromotionRule = async (req, res) => {
     const { id } = req.params;
     const rule = await getPromotionRuleById(id);
 
-    if (!rule) {
+    // Devolvemos 404 (no 403) cuando un admin de cancha consulta una regla
+    // ajena: no exponemos la existencia de reglas de otros administradores.
+    const ownerScope = scopedCreatedBy(req);
+    if (!rule || (ownerScope && rule.created_by !== ownerScope)) {
       return res.status(404).json({
         success: false,
         error: 'Regla de promoción no encontrada',
@@ -229,9 +240,13 @@ const createNewPromotionRule = async (req, res) => {
     }
 
     // ========== VALIDACIÓN DE CONFLICTOS DE REGLAS ==========
+    // Cuando es admin de cancha, los conflictos se evalúan SOLO contra sus
+    // propias reglas. Esto evita que un admin sea bloqueado por reglas de
+    // otros administradores y a la vez no expone su existencia.
+    const ownerScope = scopedCreatedBy(req);
 
     // 1. Verificar si ya existe una regla global activa (bloquea cualquier nueva regla)
-    const globalRule = await checkGlobalRuleExists();
+    const globalRule = await checkGlobalRuleExists(null, ownerScope);
     if (globalRule) {
       return res.status(409).json({
         success: false,
@@ -242,7 +257,7 @@ const createNewPromotionRule = async (req, res) => {
 
     // 2. Si se intenta crear una regla "all", verificar que no haya NINGUNA regla activa
     if (applies_to.toLowerCase() === 'all') {
-      const anyRuleCheck = await checkAnyActiveRuleExists();
+      const anyRuleCheck = await checkAnyActiveRuleExists(null, ownerScope);
       if (anyRuleCheck.hasConflict) {
         return res.status(409).json({
           success: false,
@@ -255,7 +270,7 @@ const createNewPromotionRule = async (req, res) => {
 
     // 3. Validar que las canchas seleccionadas no tengan ya una regla activa
     if (applies_to.toLowerCase() === 'specific_fields' && specific_fields && specific_fields.length > 0) {
-      const fieldsWithRules = await checkFieldsWithExistingRules(specific_fields);
+      const fieldsWithRules = await checkFieldsWithExistingRules(specific_fields, null, ownerScope);
       if (fieldsWithRules.length > 0) {
         const fieldNames = fieldsWithRules.map(f => `"${f.field_name}" (ya tiene la regla "${f.rule_name}")`).join(', ');
         return res.status(409).json({
@@ -315,9 +330,10 @@ const updateExistingPromotionRule = async (req, res) => {
       specific_sports,
     } = req.body;
 
-    // Verificar si la regla existe
+    // Verificar si la regla existe (y que pertenece al admin actual)
     const existingRule = await getPromotionRuleById(id);
-    if (!existingRule) {
+    const ownerScope = scopedCreatedBy(req);
+    if (!existingRule || (ownerScope && existingRule.created_by !== ownerScope)) {
       return res.status(404).json({
         success: false,
         error: 'Regla de promoción no encontrada',
@@ -367,8 +383,11 @@ const updateExistingPromotionRule = async (req, res) => {
 
     // Solo validar conflictos si la regla estará activa
     if (effectiveIsActive) {
+      // Mismo scoping por admin que en createNewPromotionRule.
+      const ownerScopeUpd = scopedCreatedBy(req);
+
       // 1. Verificar si ya existe una regla global activa (excluyendo la actual)
-      const globalRule = await checkGlobalRuleExists(id);
+      const globalRule = await checkGlobalRuleExists(id, ownerScopeUpd);
       if (globalRule) {
         return res.status(409).json({
           success: false,
@@ -379,7 +398,7 @@ const updateExistingPromotionRule = async (req, res) => {
 
       // 2. Si se cambia a "all", verificar que no haya NINGUNA otra regla activa
       if (effectiveAppliesTo === 'all') {
-        const anyRuleCheck = await checkAnyActiveRuleExists(id);
+        const anyRuleCheck = await checkAnyActiveRuleExists(id, ownerScopeUpd);
         if (anyRuleCheck.hasConflict) {
           return res.status(409).json({
             success: false,
@@ -392,7 +411,7 @@ const updateExistingPromotionRule = async (req, res) => {
 
       // 3. Validar que las canchas seleccionadas no tengan ya una regla activa (excluyendo la regla actual)
       if (effectiveAppliesTo === 'specific_fields' && specific_fields && specific_fields.length > 0) {
-        const fieldsWithRules = await checkFieldsWithExistingRules(specific_fields, id);
+        const fieldsWithRules = await checkFieldsWithExistingRules(specific_fields, id, ownerScopeUpd);
         if (fieldsWithRules.length > 0) {
           const fieldNames = fieldsWithRules.map(f => `"${f.field_name}" (ya tiene la regla "${f.rule_name}")`).join(', ');
           return res.status(409).json({
@@ -441,9 +460,10 @@ const deletePromotionRuleById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Verificar si la regla existe
+    // Verificar si la regla existe (y que pertenece al admin actual)
     const existingRule = await getPromotionRuleById(id);
-    if (!existingRule) {
+    const ownerScope = scopedCreatedBy(req);
+    if (!existingRule || (ownerScope && existingRule.created_by !== ownerScope)) {
       return res.status(404).json({
         success: false,
         error: 'Regla de promoción no encontrada',
@@ -478,7 +498,8 @@ const deletePromotionRuleById = async (req, res) => {
  */
 const getStats = async (req, res) => {
   try {
-    const stats = await getPromotionRuleStats();
+    // Stats acotadas al admin de cancha; super_admin recibe stats globales.
+    const stats = await getPromotionRuleStats(scopedCreatedBy(req));
 
     res.json({
       success: true,
@@ -705,7 +726,12 @@ const getFieldsWithActiveRulesController = async (req, res) => {
   try {
     const { excludeRuleId } = req.query;
 
-    const fieldsWithRules = await getFieldsWithActiveRules(excludeRuleId ? parseInt(excludeRuleId) : null);
+    // Solo se reportan canchas cuyo conflicto de regla pertenece al admin
+    // actual; super_admin obtiene todas.
+    const fieldsWithRules = await getFieldsWithActiveRules(
+      excludeRuleId ? parseInt(excludeRuleId) : null,
+      scopedCreatedBy(req)
+    );
 
     res.json({
       success: true,
