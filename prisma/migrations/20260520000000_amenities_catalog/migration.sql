@@ -60,39 +60,56 @@ ALTER TABLE field_amenities
 --    para tolerar variantes con/sin tilde en "Botiquín" sin requerir
 --    extensiones (CREATE EXTENSION unaccent requiere SUPERUSER, que
 --    el usuario de Railway PostgreSQL no tiene).
+--
+--    Envuelto en DO $$ porque la columna legacy `field_amenities.amenity`
+--    puede haber sido eliminada previamente por un `prisma db push` en la
+--    misma BD (caso real en Railway: el schema actualizado se sincronizó
+--    antes de ejecutar migrate deploy). En ese caso el UPDATE referenciaría
+--    una columna inexistente y abortaría toda la transacción. Verificamos
+--    con information_schema antes de tocar la columna legacy.
 -- ------------------------------------------------------------
-UPDATE field_amenities fa
-SET amenity_id = ac.id
-FROM amenities_catalog ac
-WHERE fa.amenity_id IS NULL
-  AND fa.amenity IS NOT NULL
-  AND (
-        LOWER(ac.label) = LOWER(fa.amenity)
-     OR LOWER(ac.key)   = LOWER(fa.amenity)
-     OR (
-            ac.key = 'first_aid'
-        AND LOWER(fa.amenity) LIKE '%primeros auxilios%'
-        )
-     OR (
-            ac.key = 'changing_rooms'
-        AND LOWER(fa.amenity) = 'vestuarios'
-        )
-     OR (
-            ac.key = 'drinks'
-        AND LOWER(fa.amenity) IN ('venta de bebidas', 'bebidas')
-        )
-     OR (
-            ac.key = 'snacks'
-        AND LOWER(fa.amenity) IN ('venta de snacks', 'snacks')
-        )
-  );
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'field_amenities'
+          AND column_name = 'amenity'
+    ) THEN
+        UPDATE field_amenities fa
+        SET amenity_id = ac.id
+        FROM amenities_catalog ac
+        WHERE fa.amenity_id IS NULL
+          AND fa.amenity IS NOT NULL
+          AND (
+                LOWER(ac.label) = LOWER(fa.amenity)
+             OR LOWER(ac.key)   = LOWER(fa.amenity)
+             OR (
+                    ac.key = 'first_aid'
+                AND LOWER(fa.amenity) LIKE '%primeros auxilios%'
+                )
+             OR (
+                    ac.key = 'changing_rooms'
+                AND LOWER(fa.amenity) = 'vestuarios'
+                )
+             OR (
+                    ac.key = 'drinks'
+                AND LOWER(fa.amenity) IN ('venta de bebidas', 'bebidas')
+                )
+             OR (
+                    ac.key = 'snacks'
+                AND LOWER(fa.amenity) IN ('venta de snacks', 'snacks')
+                )
+          );
 
--- ------------------------------------------------------------
--- 5. Eliminar filas legacy que no corresponden al catálogo
---    (p. ej. "Césped sintético"/"Césped natural" que duplicaban
---    field_dimensions.surface_type, y el fallback "Cancha deportiva").
--- ------------------------------------------------------------
-DELETE FROM field_amenities WHERE amenity_id IS NULL;
+        -- Eliminar filas legacy que no matchearon ningún registro del
+        -- catálogo (ej. "Césped sintético", "Cancha deportiva", etc.).
+        -- Solo aplica cuando todavía existía la columna legacy: en BDs
+        -- ya migradas por db push, amenity_id es NOT NULL y no hay nada
+        -- que borrar aquí.
+        DELETE FROM field_amenities WHERE amenity_id IS NULL;
+    END IF;
+END$$;
 
 -- ------------------------------------------------------------
 -- 6. Hacer amenity_id NOT NULL y FK
