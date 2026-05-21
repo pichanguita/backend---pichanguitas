@@ -55,36 +55,35 @@ ALTER TABLE field_amenities
 
 -- ------------------------------------------------------------
 -- 4. Backfill: mapear strings legacy a IDs del catálogo.
---    Match por label exacto, key, o por contenido (case-insensitive,
---    sin acentos) para tolerar variantes históricas como
---    "Botiquin Primeros Auxilios" / "Primeros auxilios" / etc.
+--    Match por label exacto, key, o por contenido (case-insensitive).
+--    El branch especial para 'first_aid' usa LIKE '%primeros auxilios%'
+--    para tolerar variantes con/sin tilde en "Botiquín" sin requerir
+--    extensiones (CREATE EXTENSION unaccent requiere SUPERUSER, que
+--    el usuario de Railway PostgreSQL no tiene).
 -- ------------------------------------------------------------
--- Helper local: función sin acentos. Se crea solo si no existe.
-CREATE EXTENSION IF NOT EXISTS unaccent;
-
 UPDATE field_amenities fa
 SET amenity_id = ac.id
 FROM amenities_catalog ac
 WHERE fa.amenity_id IS NULL
   AND fa.amenity IS NOT NULL
   AND (
-        LOWER(unaccent(ac.label)) = LOWER(unaccent(fa.amenity))
-     OR LOWER(unaccent(ac.key))   = LOWER(unaccent(fa.amenity))
+        LOWER(ac.label) = LOWER(fa.amenity)
+     OR LOWER(ac.key)   = LOWER(fa.amenity)
      OR (
             ac.key = 'first_aid'
-        AND LOWER(unaccent(fa.amenity)) LIKE '%primeros auxilios%'
+        AND LOWER(fa.amenity) LIKE '%primeros auxilios%'
         )
      OR (
             ac.key = 'changing_rooms'
-        AND LOWER(unaccent(fa.amenity)) = 'vestuarios'
+        AND LOWER(fa.amenity) = 'vestuarios'
         )
      OR (
             ac.key = 'drinks'
-        AND LOWER(unaccent(fa.amenity)) IN ('venta de bebidas', 'bebidas')
+        AND LOWER(fa.amenity) IN ('venta de bebidas', 'bebidas')
         )
      OR (
             ac.key = 'snacks'
-        AND LOWER(unaccent(fa.amenity)) IN ('venta de snacks', 'snacks')
+        AND LOWER(fa.amenity) IN ('venta de snacks', 'snacks')
         )
   );
 

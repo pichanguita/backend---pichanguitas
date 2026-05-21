@@ -24,7 +24,18 @@
 
 const { PrismaClient } = require('@prisma/client');
 
-const FAILED_MIGRATIONS_TO_CLEAR = ['20260424000000_clean_badges_schema'];
+// Migraciones que pueden haber quedado en estado fallido en producción y deben
+// ser liberadas (DELETE en _prisma_migrations cuando finished_at IS NULL) para
+// que `prisma migrate deploy` las reintente con la versión corregida del SQL.
+// - 20260424000000_clean_badges_schema: fallo histórico por backfill desde una
+//   columna ya inexistente cuando la BD venía de `prisma db push`.
+// - 20260520000000_amenities_catalog: contenía `CREATE EXTENSION unaccent` que
+//   requiere SUPERUSER y Railway PostgreSQL no lo concede; abortaba la
+//   transacción. SQL ya no depende de la extensión.
+const FAILED_MIGRATIONS_TO_CLEAR = [
+  '20260424000000_clean_badges_schema',
+  '20260520000000_amenities_catalog',
+];
 
 async function main() {
   const prisma = new PrismaClient();
