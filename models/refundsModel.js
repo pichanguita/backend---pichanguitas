@@ -222,19 +222,48 @@ const processRefund = async (id, processed_by) => {
  * @returns {Promise<Object|null>} Reembolso rechazado o null
  */
 const rejectRefund = async (id, processed_by) => {
-  const query = `
-    UPDATE refunds
-    SET status = 'rejected',
-        processed_at = CURRENT_TIMESTAMP,
-        processed_by = $1,
-        user_id_modification = $1,
-        date_time_modification = CURRENT_TIMESTAMP
-    WHERE id = $2
-    RETURNING *
-  `;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  const result = await pool.query(query, [processed_by, id]);
-  return result.rows.length > 0 ? result.rows[0] : null;
+    // 1. Marcar el refund como rejected.
+    const refundResult = await client.query(
+      `UPDATE refunds
+       SET status = 'rejected',
+           processed_at = CURRENT_TIMESTAMP,
+           processed_by = $1,
+           user_id_modification = $1,
+           date_time_modification = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING *`,
+      [processed_by, id]
+    );
+
+    const rejectedRefund = refundResult.rows[0] || null;
+
+    // 2. Si el refund fue rechazado y la reserva está cancelled, la empresa
+    //    retiene el 100% del adelanto. advance_kept debe pasar al monto completo
+    //    (antes valía advance_payment - refund_amount). Para no_show se ignora
+    //    porque el reporte de no_show usa advance_payment directamente.
+    if (rejectedRefund) {
+      await client.query(
+        `UPDATE reservations
+         SET advance_kept = advance_payment,
+             user_id_modification = $1,
+             date_time_modification = CURRENT_TIMESTAMP
+         WHERE id = $2 AND status = 'cancelled'`,
+        [processed_by, rejectedRefund.reservation_id]
+      );
+    }
+
+    await client.query('COMMIT');
+    return rejectedRefund;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 /**

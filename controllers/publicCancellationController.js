@@ -4,31 +4,31 @@
  * Permite a los clientes cancelar sus reservas sin autenticación,
  * validando por número de teléfono + ID de reserva.
  *
- * Aplica las políticas de cancelación de cada cancha.
+ * Aplica las políticas de cancelación de cada cancha vía cancellationService.
  */
 
-const pool = require('../config/db');
-const { getReservationById, cancelReservation } = require('../models/reservationsModel');
+const { getReservationById } = require('../models/reservationsModel');
 const {
   getCancellationPolicyByFieldId,
   validateCancellation,
 } = require('../models/cancellationPoliciesModel');
-const { createRefund, refundExistsForReservation } = require('../models/refundsModel');
+const { cancelReservationWithPolicy } = require('../services/cancellationService');
+
+const verifyPhoneOwnership = (reservation, phone_number) => {
+  const customerPhone = reservation.customer_phone || reservation.customerPhone || '';
+  const normalizedInputPhone = (phone_number || '').replace(/\D/g, '').slice(-9);
+  const normalizedCustomerPhone = customerPhone.replace(/\D/g, '').slice(-9);
+  return normalizedInputPhone === normalizedCustomerPhone;
+};
 
 /**
- * Cancelar reserva públicamente (sin autenticación)
- * Valida por teléfono del cliente y aplica política de cancelación
- *
  * @route PUT /api/public/reservations/:id/cancel
  */
 const cancelReservationPublic = async (req, res) => {
-  const client = await pool.connect();
-
   try {
     const { id } = req.params;
     const { phone_number, cancellation_reason } = req.body;
 
-    // Validación básica
     if (!phone_number) {
       return res.status(400).json({
         success: false,
@@ -36,9 +36,7 @@ const cancelReservationPublic = async (req, res) => {
       });
     }
 
-    // Obtener la reserva
     const reservation = await getReservationById(id);
-
     if (!reservation) {
       return res.status(404).json({
         success: false,
@@ -46,134 +44,62 @@ const cancelReservationPublic = async (req, res) => {
       });
     }
 
-    // Verificar que el teléfono coincide con el cliente de la reserva
-    const customerPhone = reservation.customer_phone || reservation.customerPhone;
-    const normalizedInputPhone = phone_number.replace(/\D/g, '').slice(-9);
-    const normalizedCustomerPhone = (customerPhone || '').replace(/\D/g, '').slice(-9);
-
-    if (normalizedInputPhone !== normalizedCustomerPhone) {
+    if (!verifyPhoneOwnership(reservation, phone_number)) {
       return res.status(403).json({
         success: false,
         error: 'El número de teléfono no coincide con el registrado en la reserva',
       });
     }
 
-    // Obtener política de cancelación de la cancha
-    const policy = await getCancellationPolicyByFieldId(reservation.field_id);
+    const result = await cancelReservationWithPolicy({
+      reservationId: id,
+      cancelledBy: 'customer',
+      cancellationReason: cancellation_reason || 'Cancelada por el cliente',
+      userId: null,
+    });
 
-    // Validar si puede cancelar
-    const validation = validateCancellation(reservation, policy);
-
-    if (!validation.canCancel) {
-      return res.status(400).json({
-        success: false,
-        error: validation.reason,
-        code: 'CANCELLATION_NOT_ALLOWED',
-      });
-    }
-
-    // Iniciar transacción
-    await client.query('BEGIN');
-
-    // Calcular montos
-    const advancePayment = parseFloat(reservation.advance_payment) || 0;
-    const advanceKept = advancePayment - validation.refundAmount;
-    const lostRevenue = parseFloat(reservation.total_price) || 0;
-
-    // Cancelar la reserva
-    const cancellationData = {
-      cancelled_by: 'customer',
-      cancellation_reason: cancellation_reason || 'Cancelada por el cliente',
-      advance_kept: advanceKept,
-      lost_revenue: lostRevenue,
-      user_id_modification: 1, // Sistema
-    };
-
-    const cancelledReservation = await cancelReservation(id, cancellationData);
-
-    // Si hay reembolso y no existe ya uno, crear registro de refund
-    let refundCreated = null;
-    if (validation.refundAmount > 0) {
-      const refundExists = await refundExistsForReservation(parseInt(id));
-
-      if (!refundExists) {
-        refundCreated = await createRefund({
-          reservation_id: parseInt(id),
-          customer_id: reservation.customer_id,
-          customer_name: reservation.customer_name || 'Cliente',
-          phone_number: customerPhone,
-          field_id: reservation.field_id,
-          refund_amount: validation.refundAmount,
-          status: 'pending',
-          cancelled_at: new Date(),
-          cancellation_reason: cancellation_reason || 'Cancelada por el cliente',
-          user_id_registration: 1, // Sistema
-        });
-
-        console.log('📝 Refund creado automáticamente:', {
-          refundId: refundCreated.id,
-          reservationId: id,
-          amount: validation.refundAmount,
-        });
-      }
-    }
-
-    // Restaurar horas gratis si se usaron
-    if (reservation.free_hours_used > 0 && reservation.customer_id) {
-      await client.query(
-        `UPDATE customers
-         SET available_free_hours = COALESCE(available_free_hours, 0) + $1,
-             used_free_hours = COALESCE(used_free_hours, 0) - $1,
-             date_time_modification = CURRENT_TIMESTAMP
-         WHERE id = $2`,
-        [reservation.free_hours_used, reservation.customer_id]
-      );
-      console.log(
-        `♻️ Restauradas ${reservation.free_hours_used} horas gratis al cliente ${reservation.customer_id}`
-      );
-    }
-
-    await client.query('COMMIT');
-
-    // Respuesta exitosa
     res.json({
       success: true,
       message: 'Reserva cancelada exitosamente',
       data: {
         reservation: {
-          id: cancelledReservation.id,
+          id: result.reservation.id,
           status: 'cancelled',
-          cancelled_at: cancelledReservation.cancelled_at,
+          cancelled_at: result.reservation.cancelled_at,
         },
-        refund: refundCreated
+        refund: result.refund
           ? {
-              id: refundCreated.id,
-              amount: validation.refundAmount,
-              percentage: validation.refundPercentage,
+              id: result.refund.id,
+              amount: result.refundAmount,
+              percentage: result.policy.refundPercentage,
               status: 'pending',
-              message: `Se te reembolsará S/ ${validation.refundAmount.toFixed(2)} (${validation.refundPercentage}% del adelanto). El administrador procesará tu reembolso pronto.`,
+              message: `Se te reembolsará S/ ${result.refundAmount.toFixed(2)} (${result.policy.refundPercentage}% del adelanto). El administrador procesará tu reembolso pronto.`,
             }
           : null,
-        advanceKept: advanceKept,
-        freeHoursRestored: reservation.free_hours_used || 0,
+        advanceKept: result.advanceKept,
+        freeHoursRestored: result.freeHoursRestored,
       },
     });
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (error.code === 'NOT_FOUND') {
+      return res.status(404).json({ success: false, error: error.message });
+    }
+    if (error.code === 'CANCELLATION_NOT_ALLOWED') {
+      return res.status(400).json({
+        success: false,
+        error: error.message,
+        code: 'CANCELLATION_NOT_ALLOWED',
+      });
+    }
     console.error('❌ Error al cancelar reserva públicamente:', error);
     res.status(500).json({
       success: false,
       error: 'Error al cancelar la reserva. Por favor, intenta nuevamente.',
     });
-  } finally {
-    client.release();
   }
 };
 
 /**
- * Obtener información de cancelación de una reserva (sin cancelar)
- * Permite al cliente ver si puede cancelar y el monto de reembolso
- *
  * @route GET /api/public/reservations/:id/cancellation-info
  */
 const getCancellationInfo = async (req, res) => {
@@ -188,9 +114,7 @@ const getCancellationInfo = async (req, res) => {
       });
     }
 
-    // Obtener la reserva
     const reservation = await getReservationById(id);
-
     if (!reservation) {
       return res.status(404).json({
         success: false,
@@ -198,22 +122,14 @@ const getCancellationInfo = async (req, res) => {
       });
     }
 
-    // Verificar que el teléfono coincide
-    const customerPhone = reservation.customer_phone || reservation.customerPhone;
-    const normalizedInputPhone = phone_number.replace(/\D/g, '').slice(-9);
-    const normalizedCustomerPhone = (customerPhone || '').replace(/\D/g, '').slice(-9);
-
-    if (normalizedInputPhone !== normalizedCustomerPhone) {
+    if (!verifyPhoneOwnership(reservation, phone_number)) {
       return res.status(403).json({
         success: false,
         error: 'El número de teléfono no coincide con el registrado en la reserva',
       });
     }
 
-    // Obtener política de cancelación
     const policy = await getCancellationPolicyByFieldId(reservation.field_id);
-
-    // Validar cancelación
     const validation = validateCancellation(reservation, policy);
 
     res.json({

@@ -276,15 +276,33 @@ model districts {
   @@index([province_id], map: "idx_districts_province_id")
 }
 
+model amenities_catalog {
+  id                     Int               @id @default(autoincrement())
+  key                    String            @unique @db.VarChar(50)
+  label                  String            @db.VarChar(100)
+  icon_name              String            @db.VarChar(50)
+  color_class            String            @db.VarChar(50)
+  sort_order             Int               @default(0)
+  is_active              Boolean           @default(true)
+  date_time_registration DateTime?         @default(now()) @db.Timestamptz(6)
+  date_time_modification DateTime?         @db.Timestamptz(6)
+  field_amenities        field_amenities[]
+
+  @@index([is_active, sort_order], map: "idx_amenities_catalog_active_sort")
+}
+
 model field_amenities {
-  id                     Int       @id @default(autoincrement())
+  id                     Int               @id @default(autoincrement())
   field_id               Int
-  amenity                String    @db.VarChar(255)
+  amenity_id             Int
   user_id_registration   Int?
-  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  date_time_registration DateTime?         @default(now()) @db.Timestamptz(6)
   user_id_modification   Int?
-  date_time_modification DateTime? @db.Timestamptz(6)
-  fields                 fields    @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_amenities_field")
+  date_time_modification DateTime?         @db.Timestamptz(6)
+  fields                 fields            @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_field_amenities_field")
+  amenities_catalog      amenities_catalog @relation(fields: [amenity_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_field_amenities_amenity")
+
+  @@unique([field_id, amenity_id], map: "uq_field_amenities_field_amenity")
 }
 
 model field_cancellation_policies {
@@ -900,6 +918,22 @@ model site_config {
   date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
   user_id_modification   Int?
   date_time_modification DateTime? @db.Timestamptz(6)
+}
+
+model video_tutorials {
+  id                     Int       @id @default(autoincrement())
+  slug                   String    @unique @db.VarChar(50)
+  title                  String    @db.VarChar(255)
+  description            String    @default("") @db.Text
+  video_url              String    @default("") @db.Text
+  sort_order             Int       @default(0)
+  is_active              Boolean   @default(true)
+  user_id_registration   Int?
+  date_time_registration DateTime? @default(now()) @db.Timestamptz(6)
+  user_id_modification   Int?
+  date_time_modification DateTime? @db.Timestamptz(6)
+
+  @@index([is_active, sort_order], map: "idx_video_tutorials_active_sort")
 }
 
 model social_media {

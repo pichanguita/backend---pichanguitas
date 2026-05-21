@@ -178,7 +178,8 @@ const transformFieldToCamelCase = field => {
     sportIcons: field.sport_icons || [],
     // Imágenes de la cancha
     images: field.images || [],
-    // Amenities/Servicios (array de strings)
+    // Amenities/Servicios — array de objetos {key, label, icon_name, color_class}
+    // del catálogo amenities_catalog. El frontend renderiza directo sin mappers.
     amenities: field.amenities || [],
     // Dimensiones de la cancha (transformar snake_case a camelCase + limpiar sufijos legacy)
     dimensions: field.dimensions

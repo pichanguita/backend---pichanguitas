@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const { toProxyUrl } = require('../services/wasabiService');
 const { weekDayOrderSql } = require('../utils/fieldSchedule');
+const { resolveKeysToIds } = require('./amenitiesCatalogModel');
 
 /**
  * Obtener horarios operativos (field_schedules) de una cancha como filas snake_case.
@@ -202,13 +203,17 @@ const getAllFields = async (filters = {}) => {
       field.sport_icons = [];
     }
 
-    // Amenities (servicios) desde field_amenities
+    // Amenities (servicios) desde field_amenities + amenities_catalog
     try {
       const amenitiesQuery = `
-        SELECT amenity FROM field_amenities WHERE field_id = $1
+        SELECT ac.key, ac.label, ac.icon_name, ac.color_class
+        FROM field_amenities fa
+        INNER JOIN amenities_catalog ac ON ac.id = fa.amenity_id
+        WHERE fa.field_id = $1 AND ac.is_active = TRUE
+        ORDER BY ac.sort_order ASC, ac.id ASC
       `;
       const amenitiesResult = await pool.query(amenitiesQuery, [field.id]);
-      field.amenities = amenitiesResult.rows.map(row => row.amenity);
+      field.amenities = amenitiesResult.rows;
     } catch (err) {
       console.error(`Error obteniendo amenities para cancha ${field.id}:`, err.message);
       field.amenities = [];
@@ -396,13 +401,17 @@ const getFieldById = async id => {
     field.sport_icons = [];
   }
 
-  // Amenities (servicios) desde field_amenities
+  // Amenities (servicios) desde field_amenities + amenities_catalog
   try {
     const amenitiesQuery = `
-      SELECT amenity FROM field_amenities WHERE field_id = $1
+      SELECT ac.key, ac.label, ac.icon_name, ac.color_class
+      FROM field_amenities fa
+      INNER JOIN amenities_catalog ac ON ac.id = fa.amenity_id
+      WHERE fa.field_id = $1 AND ac.is_active = TRUE
+      ORDER BY ac.sort_order ASC, ac.id ASC
     `;
     const amenitiesResult = await pool.query(amenitiesQuery, [id]);
-    field.amenities = amenitiesResult.rows.map(row => row.amenity);
+    field.amenities = amenitiesResult.rows;
   } catch (err) {
     console.error(`Error obteniendo amenities para cancha ${id}:`, err.message);
     field.amenities = [];
@@ -646,17 +655,19 @@ const createField = async fieldData => {
       }
     }
 
-    // 4. Insertar amenities en field_amenities (si se proporcionaron)
-    if (amenities && amenities.length > 0) {
-      for (const amenity of amenities) {
+    // 4. Insertar amenities en field_amenities (acepta array de KEYS del catálogo)
+    if (Array.isArray(amenities) && amenities.length > 0) {
+      const amenityIds = await resolveKeysToIds(amenities);
+      for (const amenityId of amenityIds) {
         try {
           await client.query(
-            `INSERT INTO field_amenities (field_id, amenity, user_id_registration, date_time_registration)
-             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
-            [fieldId, amenity, user_id_registration]
+            `INSERT INTO field_amenities (field_id, amenity_id, user_id_registration, date_time_registration)
+             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+             ON CONFLICT ON CONSTRAINT uq_field_amenities_field_amenity DO NOTHING`,
+            [fieldId, amenityId, user_id_registration]
           );
         } catch (amenityError) {
-          console.warn(`Error al guardar amenity "${amenity}":`, amenityError.message);
+          console.warn(`Error al guardar amenity id=${amenityId}:`, amenityError.message);
         }
       }
     }
@@ -709,10 +720,16 @@ const createField = async fieldData => {
     newField.sport_names = sportsResult.rows.map(row => row.sport_name);
     newField.sport_icons = sportsResult.rows.map(row => row.sport_icon);
 
-    // Obtener amenities insertados
-    const amenitiesQuery = `SELECT amenity FROM field_amenities WHERE field_id = $1`;
+    // Obtener amenities insertados (joined con catálogo para respuesta enriquecida)
+    const amenitiesQuery = `
+      SELECT ac.key, ac.label, ac.icon_name, ac.color_class
+      FROM field_amenities fa
+      INNER JOIN amenities_catalog ac ON ac.id = fa.amenity_id
+      WHERE fa.field_id = $1 AND ac.is_active = TRUE
+      ORDER BY ac.sort_order ASC, ac.id ASC
+    `;
     const amenitiesResult = await pool.query(amenitiesQuery, [fieldId]);
-    newField.amenities = amenitiesResult.rows.map(row => row.amenity);
+    newField.amenities = amenitiesResult.rows;
 
     // Obtener dimensiones insertadas
     const dimensionsQuery = `SELECT length, width, area, surface_type FROM field_dimensions WHERE field_id = $1`;
@@ -910,21 +927,22 @@ const updateField = async (id, fieldData) => {
       }
     }
 
-    // 4. Actualizar amenities en field_amenities (delete + insert)
-    if (amenities && amenities.length > 0) {
-      // Eliminar amenities anteriores
+    // 4. Actualizar amenities en field_amenities (siempre DELETE + INSERT idempotente).
+    // Si `amenities` es undefined (el caller no envió la clave), no se toca.
+    // Si es array (incluso vacío), se sincroniza: vaciar permite desmarcar todo.
+    if (Array.isArray(amenities)) {
       await client.query('DELETE FROM field_amenities WHERE field_id = $1', [id]);
-
-      // Insertar los nuevos amenities
-      for (const amenity of amenities) {
+      const amenityIds = await resolveKeysToIds(amenities);
+      for (const amenityId of amenityIds) {
         try {
           await client.query(
-            `INSERT INTO field_amenities (field_id, amenity, user_id_registration, date_time_registration)
-             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
-            [id, amenity, user_id_modification]
+            `INSERT INTO field_amenities (field_id, amenity_id, user_id_registration, date_time_registration)
+             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+             ON CONFLICT ON CONSTRAINT uq_field_amenities_field_amenity DO NOTHING`,
+            [id, amenityId, user_id_modification]
           );
         } catch (amenityError) {
-          console.warn(`Error al guardar amenity "${amenity}":`, amenityError.message);
+          console.warn(`Error al guardar amenity id=${amenityId}:`, amenityError.message);
         }
       }
     }
@@ -1109,9 +1127,14 @@ const getFieldConfig = async fieldId => {
     // Obtener horarios (fuente única vía helper compartido)
     const schedulesResult = { rows: await getFieldSchedulesRows(fieldId) };
 
-    // Obtener amenidades
-    const amenitiesQuery =
-      'SELECT id, amenity as amenity_name, true as is_available FROM field_amenities WHERE field_id = $1';
+    // Obtener amenidades (joined con catálogo: contrato {key,label,icon_name,color_class})
+    const amenitiesQuery = `
+      SELECT ac.key, ac.label, ac.icon_name, ac.color_class
+      FROM field_amenities fa
+      INNER JOIN amenities_catalog ac ON ac.id = fa.amenity_id
+      WHERE fa.field_id = $1 AND ac.is_active = TRUE
+      ORDER BY ac.sort_order ASC, ac.id ASC
+    `;
     const amenitiesResult = await client.query(amenitiesQuery, [fieldId]);
 
     // Obtener reglas
@@ -1141,6 +1164,7 @@ const getFieldConfig = async fieldId => {
         fsp.name,
         fsp.description,
         fsp.price AS "discountValue",
+        fsp.discount_type AS "discountType",
         fsp.time_ranges AS "timeSlots",
         fsp.days AS "daysOfWeek"
       FROM field_special_pricing fsp
@@ -1153,7 +1177,7 @@ const getFieldConfig = async fieldId => {
       id: row.id,
       name: row.name || '',
       discountValue: parseFloat(row.discountValue) || 0,
-      discountType: 'percentage',
+      discountType: row.discountType || 'percentage',
       timeSlots: row.timeSlots || [],
       daysOfWeek: row.daysOfWeek || [],
     }));
@@ -1286,20 +1310,21 @@ const updateFieldConfig = async (fieldId, configData, userId) => {
       }
     }
 
-    // 3. Actualizar amenidades
-    if (configData.amenities && Array.isArray(configData.amenities)) {
-      // Eliminar amenidades existentes
+    // 3. Actualizar amenidades — contrato uniforme: array de KEYS del catálogo
+    if (Array.isArray(configData.amenities)) {
       await client.query('DELETE FROM field_amenities WHERE field_id = $1', [fieldId]);
-
-      // Insertar nuevas amenidades
-      for (const amenity of configData.amenities) {
-        if (amenity.is_available !== false) {
-          await client.query(
-            `INSERT INTO field_amenities (field_id, amenity, user_id_registration)
-             VALUES ($1, $2, $3)`,
-            [fieldId, amenity.amenity_name, userId]
-          );
-        }
+      // Acepta tanto array de strings (keys) como array de objetos {key,...}
+      const keys = configData.amenities
+        .map((a) => (typeof a === 'string' ? a : a?.key))
+        .filter(Boolean);
+      const amenityIds = await resolveKeysToIds(keys);
+      for (const amenityId of amenityIds) {
+        await client.query(
+          `INSERT INTO field_amenities (field_id, amenity_id, user_id_registration)
+           VALUES ($1, $2, $3)
+           ON CONFLICT ON CONSTRAINT uq_field_amenities_field_amenity DO NOTHING`,
+          [fieldId, amenityId, userId]
+        );
       }
     }
 
@@ -1396,12 +1421,13 @@ const updateFieldConfig = async (fieldId, configData, userId) => {
         // Insertar precio especial principal con time_ranges y days como JSONB
         const timeRanges = pricing.timeSlots && Array.isArray(pricing.timeSlots) ? JSON.stringify(pricing.timeSlots) : null;
         const days = pricing.daysOfWeek && Array.isArray(pricing.daysOfWeek) ? JSON.stringify(pricing.daysOfWeek.map(d => d.toLowerCase())) : null;
+        const discountType = pricing.discountType === 'amount' ? 'amount' : 'percentage';
 
         await client.query(
-          `INSERT INTO field_special_pricing (field_id, name, description, price, time_ranges, days, is_active, user_id_registration)
-           VALUES ($1, $2, $3, $4, $5, $6, true, $7)
+          `INSERT INTO field_special_pricing (field_id, name, description, price, discount_type, time_ranges, days, is_active, user_id_registration)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8)
            RETURNING id`,
-          [fieldId, priceName, pricing.description || null, priceValue, timeRanges, days, userId]
+          [fieldId, priceName, pricing.description || null, priceValue, discountType, timeRanges, days, userId]
         );
       }
     }

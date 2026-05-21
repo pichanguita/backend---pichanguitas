@@ -12,6 +12,7 @@ const {
   updateFieldConfiguration,
 } = require('../controllers/fieldsController');
 const verificarToken = require('../middleware/authMiddleware');
+const { verificarTokenOpcional } = require('../middleware/authMiddleware');
 
 // Middleware para validar los roles permitidos
 const verificarRolesPermitidos = (req, res, next) => {
@@ -27,8 +28,12 @@ const router = express.Router();
 // ==================== RUTAS PÚBLICAS (Sin autenticación) ====================
 
 // GET /api/fields - Obtener todas las canchas (con filtros opcionales)
-// PÚBLICO: Permite acceso sin autenticación para que usuarios vean canchas disponibles
-router.get('/', getFields);
+// PÚBLICO con token opcional: cualquiera puede ver canchas sin autenticarse,
+// pero si llega Bearer token válido, el controller usa req.user para filtrar
+// automáticamente por admin_id cuando el solicitante es admin de cancha
+// (id_rol=2). Sin el middleware opcional, req.user quedaba undefined incluso
+// con token y el admin recibía las canchas de todos los administradores.
+router.get('/', verificarTokenOpcional, getFields);
 
 // GET /api/fields/:id/config - Obtener configuración completa de una cancha
 // PÚBLICO: Permite acceso sin autenticación para ver configuración de horarios

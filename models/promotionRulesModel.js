@@ -668,7 +668,10 @@ const getCustomerPromotions = async userId => {
     return { customer: null, promotions: [], history: [] };
   }
 
-  // Obtener todas las reglas de promoción activas
+  // Obtener todas las reglas de promoción activas.
+  // Se incluye created_by porque las promos `applies_to='all'` están scopeadas
+  // al admin dueño de la regla: el progreso suma sólo horas jugadas en canchas
+  // de ese admin (no es acumulación global del sistema).
   const rulesQuery = `
     SELECT
       id,
@@ -677,7 +680,8 @@ const getCustomerPromotions = async userId => {
       hours_required,
       free_hours,
       applies_to,
-      is_active
+      is_active,
+      created_by
     FROM promotion_rules
     WHERE is_active = true AND status = 'active'
     ORDER BY hours_required ASC
@@ -722,16 +726,27 @@ const getCustomerPromotions = async userId => {
     });
   });
 
-  // Obtener TODAS las horas jugadas por el cliente (para promociones globales).
-  // "Jugadas" = reservas no canceladas cuyo evento ya pasó (ver playedReservationClause).
-  const totalHoursQuery = `
-    SELECT COALESCE(SUM(hours), 0) as total_hours
-    FROM reservations
-    WHERE customer_id = $1
-      AND ${playedReservationClause()}
+  // Horas jugadas agrupadas por admin dueño de la cancha. Las promociones
+  // `applies_to='all'` están scopeadas al admin que creó la regla: una hora
+  // jugada en cancha del Admin A NO debe sumar al progreso de una promo del
+  // Admin B. El total global se mantiene como suma de todos los grupos para
+  // exponerlo en customer.totalHours (información agregada del cliente).
+  const hoursByAdminQuery = `
+    SELECT f.admin_id, COALESCE(SUM(r.hours), 0) AS hours
+    FROM reservations r
+    JOIN fields f ON r.field_id = f.id
+    WHERE r.customer_id = $1
+      AND ${playedReservationClause('r')}
+    GROUP BY f.admin_id
   `;
-  const totalHoursResult = await pool.query(totalHoursQuery, [customer.id]);
-  const totalPlayedHours = parseFloat(totalHoursResult.rows[0]?.total_hours) || 0;
+  const hoursByAdminResult = await pool.query(hoursByAdminQuery, [customer.id]);
+  const hoursByAdmin = {};
+  let totalPlayedHours = 0;
+  hoursByAdminResult.rows.forEach(row => {
+    const hours = parseFloat(row.hours) || 0;
+    hoursByAdmin[row.admin_id] = hours;
+    totalPlayedHours += hours;
+  });
 
   // Obtener horas jugadas POR CANCHA para el cliente (para promociones específicas)
   const hoursByFieldQuery = `
@@ -780,7 +795,8 @@ const getCustomerPromotions = async userId => {
     // Calcular horas jugadas según el tipo de promoción
     let hoursPlayed = 0;
     if (rule.applies_to === 'all') {
-      hoursPlayed = totalPlayedHours;
+      // Solo horas jugadas en canchas del admin dueño de la promo.
+      hoursPlayed = hoursByAdmin[rule.created_by] || 0;
     } else if (rule.applies_to === 'specific_fields' && associatedFields.length > 0) {
       associatedFields.forEach(field => {
         hoursPlayed += hoursByField[field.id] || 0;
@@ -844,9 +860,11 @@ const redeemPromotion = async (customerId, promotionRuleId, userId) => {
   try {
     await client.query('BEGIN');
 
-    // Verificar que la promoción existe y está activa (incluyendo applies_to)
+    // Verificar que la promoción existe y está activa (incluyendo applies_to).
+    // created_by se usa para scopear las horas jugadas al admin dueño cuando
+    // applies_to='all' (cada admin gestiona sus propias promos).
     const promoResult = await client.query(
-      'SELECT id, name, hours_required, free_hours, applies_to FROM promotion_rules WHERE id = $1 AND is_active = true AND status = $2',
+      'SELECT id, name, hours_required, free_hours, applies_to, created_by FROM promotion_rules WHERE id = $1 AND is_active = true AND status = $2',
       [promotionRuleId, 'active']
     );
 
@@ -872,13 +890,17 @@ const redeemPromotion = async (customerId, promotionRuleId, userId) => {
     let hoursPlayed = 0;
 
     if (promo.applies_to === 'all') {
-      // Promoción global: cuenta TODAS las horas de todas las canchas
+      // Promoción "global" del admin dueño: cuenta horas jugadas en canchas
+      // de ese admin (fields.admin_id = promo.created_by). No incluye horas
+      // en canchas de otros administradores.
       const totalHoursResult = await client.query(
-        `SELECT COALESCE(SUM(hours), 0) as total_hours
-         FROM reservations
-         WHERE customer_id = $1
-           AND ${playedReservationClause()}`,
-        [customerId]
+        `SELECT COALESCE(SUM(r.hours), 0) as total_hours
+         FROM reservations r
+         JOIN fields f ON r.field_id = f.id
+         WHERE r.customer_id = $1
+           AND ${playedReservationClause('r')}
+           AND f.admin_id = $2`,
+        [customerId, promo.created_by]
       );
       hoursPlayed = parseFloat(totalHoursResult.rows[0]?.total_hours) || 0;
     } else if (promo.applies_to === 'specific_fields') {
@@ -975,9 +997,11 @@ const autoRedeemEligiblePromotions = async ({
 }) => {
   if (!client || !customerId) return [];
 
-  // Promociones activas (mismo criterio que getCustomerPromotions)
+  // Promociones activas (mismo criterio que getCustomerPromotions).
+  // created_by se usa para scopear el cálculo de `applies_to='all'` al admin
+  // dueño de la regla.
   const rulesRes = await client.query(
-    `SELECT id, name, hours_required, free_hours, applies_to
+    `SELECT id, name, hours_required, free_hours, applies_to, created_by
      FROM promotion_rules
      WHERE is_active = true AND status = 'active'
      ORDER BY hours_required ASC`
@@ -1005,12 +1029,17 @@ const autoRedeemEligiblePromotions = async ({
     // Horas jugadas según tipo de promoción
     let hoursPlayed = 0;
     if (rule.applies_to === 'all') {
+      // `applies_to='all'` aplica a TODAS las canchas DEL ADMIN dueño de la
+      // promo, no a todo el sistema. Filtramos por fields.admin_id para evitar
+      // que reservas en canchas de otros admins disparen este canje.
       const r = await client.query(
-        `SELECT COALESCE(SUM(hours), 0) AS total
-         FROM reservations
-         WHERE customer_id = $1
-           AND ${playedReservationClause()}`,
-        [customerId]
+        `SELECT COALESCE(SUM(r.hours), 0) AS total
+         FROM reservations r
+         JOIN fields f ON r.field_id = f.id
+         WHERE r.customer_id = $1
+           AND ${playedReservationClause('r')}
+           AND f.admin_id = $2`,
+        [customerId, rule.created_by]
       );
       hoursPlayed = parseFloat(r.rows[0]?.total) || 0;
     } else if (rule.applies_to === 'specific_fields') {

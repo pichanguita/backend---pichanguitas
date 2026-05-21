@@ -423,7 +423,7 @@ const approveFieldById = async (req, res) => {
     }
 
     const approved_by = req.user?.id || 1;
-    const approvedField = await approveField(id, approved_by);
+    await approveField(id, approved_by);
 
     // ✅ Eliminar alertas de tipo 'field_pending_approval' para esta cancha
     try {
@@ -438,8 +438,13 @@ const approveFieldById = async (req, res) => {
       console.error('Error al eliminar alertas:', alertError);
     }
 
-    // Transformar a camelCase para el frontend
-    const approvedFieldFormatted = transformFieldToCamelCase(approvedField);
+    // Releer la cancha completa con sus relaciones (sport_ids, sport_names,
+    // amenities, dimensions, equipment, images…). El UPDATE de approveField()
+    // sólo devuelve columnas de `fields`, por lo que transformar ese resultado
+    // dejaba al frontend con sportNames=[] / sportTypes=[]: la cancha aprobada
+    // dejaba de coincidir con el filtro por deporte hasta el siguiente reload.
+    const completeField = await getFieldById(id);
+    const approvedFieldFormatted = transformFieldToCamelCase(completeField);
 
     res.json({
       success: true,
@@ -480,7 +485,7 @@ const rejectFieldById = async (req, res) => {
     }
 
     const rejected_by = req.user?.id || 1;
-    const rejectedField = await rejectField(id, rejected_by, rejection_reason);
+    await rejectField(id, rejected_by, rejection_reason);
 
     // ✅ Eliminar alertas de tipo 'field_pending_approval' para esta cancha
     try {
@@ -538,8 +543,12 @@ const rejectFieldById = async (req, res) => {
       console.error('Error al limpiar mensualidades de cancha rechazada:', paymentCleanupError);
     }
 
-    // Transformar a camelCase para el frontend
-    const rejectedFieldFormatted = transformFieldToCamelCase(rejectedField);
+    // Releer la cancha completa con sus relaciones para no perder sport_names,
+    // sport_ids, amenities, dimensions, equipment, images en la respuesta.
+    // Sin esto el frontend reemplazaba la cancha en el state con un objeto
+    // sin esos campos y la cancha desaparecía del filtro por deporte.
+    const completeField = await getFieldById(id);
+    const rejectedFieldFormatted = transformFieldToCamelCase(completeField);
 
     res.json({
       success: true,

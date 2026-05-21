@@ -3,7 +3,6 @@ const {
   getReservationById,
   createReservation,
   updateReservation,
-  cancelReservation,
   completeReservation,
   markAsNoShow,
   checkAvailability,
@@ -26,6 +25,7 @@ const {
   ACTIVITY_TYPES,
   ACTIVITY_STATUS,
 } = require('../services/activityLogsService');
+const { cancelReservationWithPolicy } = require('../services/cancellationService');
 
 /**
  * Obtener todas las reservas con filtros
@@ -725,14 +725,16 @@ const updateExistingReservation = async (req, res) => {
 };
 
 /**
- * Cancelar una reserva
+ * Cancelar una reserva (flujo admin).
+ * Aplica la política de cancelación del field igual que el flujo público:
+ * calcula advance_kept con la política vigente y crea refund pendiente si
+ * corresponde. El admin NO controla manualmente el monto retenido.
  */
 const cancelReservationById = async (req, res) => {
   try {
     const { id } = req.params;
-    const { cancelled_by, cancellation_reason, advance_kept, lost_revenue } = req.body;
+    const { cancellation_reason } = req.body;
 
-    // Verificar si la reserva existe
     const existingReservation = await getReservationById(id);
     if (!existingReservation) {
       return res.status(404).json({
@@ -741,30 +743,12 @@ const cancelReservationById = async (req, res) => {
       });
     }
 
-    // Verificar que la reserva pueda ser cancelada
-    if (existingReservation.status === 'cancelled') {
-      return res.status(400).json({
-        success: false,
-        error: 'La reserva ya está cancelada',
-      });
-    }
-
-    if (existingReservation.status === 'completed') {
-      return res.status(400).json({
-        success: false,
-        error: 'No se puede cancelar una reserva completada',
-      });
-    }
-
-    const cancellationData = {
-      cancelled_by,
-      cancellation_reason,
-      advance_kept,
-      lost_revenue,
-      user_id_modification: req.user?.id || 1,
-    };
-
-    const cancelledReservation = await cancelReservation(id, cancellationData);
+    const cancellationResult = await cancelReservationWithPolicy({
+      reservationId: id,
+      cancelledBy: 'admin',
+      cancellationReason: cancellation_reason || 'Cancelada por el administrador',
+      userId: req.user?.id || null,
+    });
 
     // Limpieza: eliminar voucher en Wasabi cuando se cancela la reserva
     if (existingReservation.payment_voucher_url) {
@@ -798,9 +782,26 @@ const cancelReservationById = async (req, res) => {
     res.json({
       success: true,
       message: 'Reserva cancelada exitosamente',
-      data: cancelledReservation,
+      data: {
+        ...cancellationResult.reservation,
+        refund: cancellationResult.refund
+          ? {
+              id: cancellationResult.refund.id,
+              amount: cancellationResult.refundAmount,
+              status: 'pending',
+            }
+          : null,
+        advanceKept: cancellationResult.advanceKept,
+      },
     });
   } catch (error) {
+    if (error.code === 'CANCELLATION_NOT_ALLOWED') {
+      return res.status(400).json({
+        success: false,
+        error: error.message,
+        code: 'CANCELLATION_NOT_ALLOWED',
+      });
+    }
     console.error('Error al cancelar reserva:', error);
     res.status(500).json({
       success: false,
@@ -987,7 +988,7 @@ const markReservationAsNoShow = async (req, res) => {
           action: 'reservation.no_show',
           entityType: ACTIVITY_TYPES.RESERVATION,
           entityId: Number(id),
-          description: `Reserva marcada como no-show en "${fieldName}"`,
+          description: `Reserva marcada como "No se presentó" en "${fieldName}"`,
           status: ACTIVITY_STATUS.WARNING,
           ipAddress: resolveIp(req),
           actorUserId: req.user?.id ?? adminId,
