@@ -3,6 +3,19 @@ const { toProxyUrl } = require('../services/wasabiService');
 const { weekDayOrderSql } = require('../utils/fieldSchedule');
 const { resolveKeysToIds } = require('./amenitiesCatalogModel');
 
+// ============================================================================
+// INVARIANTE is_active <-> status (fuente única de verdad: status)
+// ----------------------------------------------------------------------------
+// Una cancha está activa (visible/operable) salvo que su status indique lo
+// contrario. Evita la divergencia "status=available pero is_active=false" que
+// dejaba canchas invisibles en la búsqueda. Mantener esta lista sincronizada
+// con el trigger trg_fields_sync_is_active de la base de datos (Capa 2).
+// ============================================================================
+const INACTIVE_FIELD_STATUSES = ['inactive', 'closed', 'deleted', 'unavailable'];
+
+const deriveIsActive = status =>
+  !INACTIVE_FIELD_STATUSES.includes(String(status || 'available').toLowerCase());
+
 /**
  * Obtener horarios operativos (field_schedules) de una cancha como filas snake_case.
  * Fuente única de verdad reutilizada por getFieldById y getFieldConfig.
@@ -320,6 +333,17 @@ const getAllFields = async (filters = {}) => {
       console.error(`Error obteniendo mantenimientos para cancha ${field.id}:`, err.message);
       field.maintenance_schedules = [];
     }
+
+    // Horario operativo (field_schedules) — incluido también en el listado
+    // para que el frontend pueda validar día/hora contra la configuración
+    // de la cancha SIN tener que pedir cada cancha por separado. El modal
+    // "Nueva Reserva" depende de esto para deshabilitar días/horas cerradas.
+    try {
+      field.schedules = await getFieldSchedulesRows(field.id);
+    } catch (err) {
+      console.error(`Error obteniendo horarios para cancha ${field.id}:`, err.message);
+      field.schedules = [];
+    }
   }
 
   return fields;
@@ -538,7 +562,6 @@ const createField = async fieldData => {
     capacity,
     requires_advance_payment = false,
     advance_payment_amount = 0,
-    is_active = true,
     is_multi_sport = false,
     created_by,
     user_id_registration,
@@ -604,7 +627,7 @@ const createField = async fieldData => {
       capacity,
       requires_advance_payment,
       advance_payment_amount,
-      is_active,
+      deriveIsActive(status), // is_active derivado de status (invariante)
       is_multi_sport,
       created_by,
       user_id_registration,
@@ -789,6 +812,12 @@ const updateField = async (id, fieldData) => {
     equipment = null,
   } = fieldData;
 
+  // is_active se deriva de status (invariante). Si el caller no envía status
+  // (update parcial), se respeta el is_active recibido y el trigger de BD
+  // re-deriva el valor final sobre la fila resultante.
+  const finalIsActive =
+    status !== undefined && status !== null ? deriveIsActive(status) : is_active;
+
   const client = await pool.connect();
 
   try {
@@ -840,7 +869,7 @@ const updateField = async (id, fieldData) => {
       capacity,
       requires_advance_payment,
       advance_payment_amount,
-      is_active,
+      finalIsActive,
       is_multi_sport,
       user_id_modification,
       id,

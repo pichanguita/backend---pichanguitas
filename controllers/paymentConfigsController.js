@@ -121,10 +121,10 @@ const upsertPaymentConfig = async (req, res) => {
       });
     }
 
-    if (!due_day || due_day < 1 || due_day > 28) {
+    if (!due_day || due_day < 1 || due_day > 31) {
       return res.status(400).json({
         success: false,
-        error: 'El día de vencimiento debe estar entre 1 y 28',
+        error: 'El día de vencimiento debe estar entre 1 y 31',
       });
     }
 
@@ -223,10 +223,10 @@ const updateExistingPaymentConfig = async (req, res) => {
       });
     }
 
-    if (due_day !== undefined && (due_day < 1 || due_day > 28)) {
+    if (due_day !== undefined && (due_day < 1 || due_day > 31)) {
       return res.status(400).json({
         success: false,
-        error: 'El día de vencimiento debe estar entre 1 y 28',
+        error: 'El día de vencimiento debe estar entre 1 y 31',
       });
     }
 

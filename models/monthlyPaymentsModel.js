@@ -1,6 +1,31 @@
 const pool = require('../config/db');
 
 /**
+ * Cantidad de días del mes (month 1-12). new Date(year, month, 0) → último día
+ * del mes indicado (day 0 = último día del mes anterior al índice month).
+ */
+const daysInMonth = (year, month) => new Date(year, month, 0).getDate();
+
+/**
+ * Acota el día de vencimiento configurado al último día real del mes.
+ * Permite configurar 1-31: en meses más cortos (feb, abr, etc.) el vencimiento
+ * se ajusta al último día disponible en vez de crashear (MAKE_DATE) o desbordar
+ * al mes siguiente (new Date).
+ */
+const clampDueDay = (year, month, dueDay) =>
+  Math.min(parseInt(dueDay, 10) || 1, daysInMonth(year, month));
+
+/**
+ * Expresión SQL para due_date con due_day acotado al último día del mes.
+ * yearParam/monthParam son los placeholders ($1, $2, ...) del año/mes en la
+ * query (no son entrada de usuario: se interpolan literales de placeholder).
+ */
+const clampedDueDateSql = (yearParam, monthParam, dueDayCol = 'pc.due_day') =>
+  `MAKE_DATE(${yearParam}::int, ${monthParam}::int, LEAST(${dueDayCol}, ` +
+  `EXTRACT(DAY FROM (MAKE_DATE(${yearParam}::int, ${monthParam}::int, 1) ` +
+  `+ INTERVAL '1 month' - INTERVAL '1 day'))::int))`;
+
+/**
  * Estados de pago:
  * - pending: Pendiente de pago
  * - reported: Admin reportó el pago, esperando confirmación del super_admin
@@ -44,7 +69,7 @@ const getMonthlyPaymentStatus = async (filters = {}) => {
       mp.confirmed_at,
       reported_user.name AS reported_by_name,
       confirmed_user.name AS confirmed_by_name,
-      MAKE_DATE($2::int, $1::int, pc.due_day) AS due_date
+      ${clampedDueDateSql('$2', '$1')} AS due_date
     FROM payment_configs pc
     JOIN fields f ON pc.field_id = f.id
     JOIN users u ON pc.admin_id = u.id
@@ -54,7 +79,7 @@ const getMonthlyPaymentStatus = async (filters = {}) => {
     LEFT JOIN users confirmed_user ON mp.confirmed_by = confirmed_user.id
     WHERE pc.is_active = true
       AND f.approval_status <> 'rejected'
-      AND pc.effective_from <= MAKE_DATE($2::int, $1::int, pc.due_day)
+      AND pc.effective_from <= ${clampedDueDateSql('$2', '$1')}
   `;
 
   const params = [month, year]; // $1 = month, $2 = year
@@ -75,7 +100,7 @@ const getMonthlyPaymentStatus = async (filters = {}) => {
     // Usar fechas UTC para consistencia entre local y producción (Railway)
     const now = new Date();
     const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const dueDate = new Date(Date.UTC(year, month - 1, row.due_day));
+    const dueDate = new Date(Date.UTC(year, month - 1, clampDueDay(year, month, row.due_day)));
 
     let calculatedStatus = 'pending';
     if (row.payment_status === 'paid') {
@@ -188,8 +213,8 @@ const createPayment = async (paymentData, userId) => {
     throw new Error('Ya existe un pago registrado para este mes');
   }
 
-  // Calcular due_date
-  const dueDate = new Date(year, month - 1, due_day || 10);
+  // Calcular due_date (acotada al último día del mes)
+  const dueDate = new Date(year, month - 1, clampDueDay(year, month, due_day || 10));
 
   const result = await pool.query(
     `
@@ -246,8 +271,8 @@ const reportPayment = async (paymentData, userId) => {
     [field_id, month, year]
   );
 
-  // Calcular due_date
-  const dueDate = new Date(year, month - 1, due_day || 10);
+  // Calcular due_date (acotada al último día del mes)
+  const dueDate = new Date(year, month - 1, clampDueDay(year, month, due_day || 10));
 
   if (existing.rows.length > 0) {
     // Si ya existe y está pagado, no permitir reportar de nuevo
@@ -437,14 +462,14 @@ const getAdminCurrentPaymentStatus = async adminId => {
       mp.payment_voucher_url,
       mp.reported_at,
       mp.notes,
-      MAKE_DATE($2::int, $1::int, pc.due_day) AS due_date
+      ${clampedDueDateSql('$2', '$1')} AS due_date
     FROM payment_configs pc
     JOIN fields f ON pc.field_id = f.id
     LEFT JOIN monthly_payments mp ON mp.field_id = pc.field_id
       AND mp.month = $1 AND mp.year = $2
     WHERE pc.admin_id = $3 AND pc.is_active = true
       AND f.approval_status <> 'rejected'
-      AND pc.effective_from <= MAKE_DATE($2::int, $1::int, pc.due_day)
+      AND pc.effective_from <= ${clampedDueDateSql('$2', '$1')}
     ORDER BY f.name
   `,
     [currentMonth, currentYear, adminId]
@@ -454,7 +479,9 @@ const getAdminCurrentPaymentStatus = async adminId => {
     // Usar fechas UTC para consistencia entre local y producción (Railway)
     const now = new Date();
     const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const dueDate = new Date(Date.UTC(currentYear, currentMonth - 1, row.due_day));
+    const dueDate = new Date(
+      Date.UTC(currentYear, currentMonth - 1, clampDueDay(currentYear, currentMonth, row.due_day))
+    );
 
     let status = 'pending';
 
@@ -547,8 +574,8 @@ const generateMonthlyPayments = async (month, year, userId) => {
         continue;
       }
 
-      // Calcular fecha de vencimiento
-      const dueDate = new Date(year, month - 1, config.due_day);
+      // Calcular fecha de vencimiento (acotada al último día del mes)
+      const dueDate = new Date(year, month - 1, clampDueDay(year, month, config.due_day));
 
       // Crear el registro de pago pendiente
       await pool.query(
@@ -616,7 +643,7 @@ const getMonthlyStats = async (month, year) => {
     JOIN fields f ON pc.field_id = f.id
     WHERE pc.is_active = true
       AND f.approval_status <> 'rejected'
-      AND pc.effective_from <= MAKE_DATE($1::int, $2::int, pc.due_day)
+      AND pc.effective_from <= ${clampedDueDateSql('$1', '$2')}
   `, [year, month]);
 
   // Obtener pagos del mes con su status
@@ -650,7 +677,7 @@ const getMonthlyStats = async (month, year) => {
     totalAmount += amount;
 
     const payment = paymentsMap.get(config.field_id);
-    const dueDate = new Date(Date.UTC(year, month - 1, config.due_day));
+    const dueDate = new Date(Date.UTC(year, month - 1, clampDueDay(year, month, config.due_day)));
 
     // Verificar si la fecha de vigencia es anterior o igual al vencimiento
     const effFrom = new Date(config.effective_from);

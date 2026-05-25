@@ -27,6 +27,10 @@ const {
 } = require('../services/activityLogsService');
 const { cancelReservationWithPolicy } = require('../services/cancellationService');
 
+// Máximo de horas que un cliente puede reservar en total por día (sumando todas
+// sus reservas activas de esa fecha, en cualquier cancha).
+const MAX_DAILY_HOURS_PER_CUSTOMER = 8;
+
 /**
  * Obtener todas las reservas con filtros
  * SEGURIDAD: Los admins de cancha solo ven reservas de SUS canchas
@@ -226,6 +230,13 @@ const createNewReservation = async (req, res) => {
     const fieldAdvancePerHour = parseFloat(field.advance_payment_amount) || 0;
     const reservedHours = parseFloat(hours) || 1;
 
+    // Adelanto manual ingresado por el admin al crear la reserva (viene en el body).
+    const manualAdvancePayment = parseFloat(req.body.advance_payment) || 0;
+    const isPartialPaymentStatus =
+      payment_status === 'partial' ||
+      payment_status === 'partially_paid' ||
+      payment_status === 'advance';
+
     // Calcular adelanto total = adelanto por hora * horas reservadas
     const calculatedAdvanceTotal = fieldAdvancePerHour * reservedHours;
 
@@ -242,6 +253,17 @@ const createNewReservation = async (req, res) => {
       calculatedAdvancePayment = parseFloat(total_price) || 0;
       calculatedRemainingPayment = 0;
       console.log('✅ [PAGADO] Reserva marcada como pagada al crear - advance = total, remaining = 0');
+    } else if (isPartialPaymentStatus && manualAdvancePayment > 0) {
+      // Adelanto manual ingresado por el admin: prima sobre el cálculo automático.
+      // El saldo es el resto del total tras descontar el adelanto.
+      const totalNum = parseFloat(total_price) || 0;
+      calculatedAdvancePayment = Math.min(manualAdvancePayment, totalNum);
+      calculatedRemainingPayment = totalNum - calculatedAdvancePayment;
+      console.log('💰 [ADELANTO MANUAL] Adelanto ingresado por admin:', {
+        manualAdvancePayment,
+        calculatedAdvancePayment,
+        calculatedRemainingPayment,
+      });
     } else if (fieldRequiresAdvance && !isCashPayment && total_price > 0) {
       // Cancha requiere adelanto Y cliente NO paga efectivo
       // Adelanto = adelanto por hora * horas (sin exceder el total)
@@ -284,6 +306,38 @@ const createNewReservation = async (req, res) => {
       return res.status(409).json({
         success: false,
         error: 'La cancha no está disponible en el horario seleccionado',
+      });
+    }
+
+    // ============================================
+    // 🔒 VALIDACIÓN: Límite de horas por día por cliente
+    // Un cliente puede reservar como máximo 8 horas en total por día (sumando
+    // todas sus reservas de esa fecha, en cualquier cancha). Se cuentan las
+    // reservas activas; se excluyen las canceladas y no-show porque liberan horas.
+    // Aplica tanto al cliente como al admin que reserva en su nombre.
+    // ============================================
+    const newReservationHours = parseFloat(hours) || 0;
+    const dailyHoursResult = await pool.query(
+      `SELECT COALESCE(SUM(hours), 0) AS total_hours
+         FROM reservations
+        WHERE customer_id = $1
+          AND date = $2
+          AND status NOT IN ('cancelled', 'canceled', 'no_show')`,
+      [customer_id, date]
+    );
+    const alreadyReservedHours = parseFloat(dailyHoursResult.rows[0].total_hours) || 0;
+
+    if (alreadyReservedHours + newReservationHours > MAX_DAILY_HOURS_PER_CUSTOMER) {
+      const remainingHours = Math.max(MAX_DAILY_HOURS_PER_CUSTOMER - alreadyReservedHours, 0);
+      return res.status(409).json({
+        success: false,
+        error:
+          `Límite diario alcanzado: un cliente puede reservar como máximo ${MAX_DAILY_HOURS_PER_CUSTOMER} horas por día. ` +
+          `Este cliente ya tiene ${alreadyReservedHours} h reservadas para esa fecha` +
+          (remainingHours > 0
+            ? ` y solo puede agregar ${remainingHours} h más.`
+            : ' y no puede agregar más horas.'),
+        code: 'DAILY_HOURS_LIMIT_EXCEEDED',
       });
     }
 

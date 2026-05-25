@@ -62,7 +62,7 @@ const poolConfig = {
   max: parseInt(process.env.DB_POOL_MAX) || 10,
   min: parseInt(process.env.DB_POOL_MIN) || 2,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 5000,
+  connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 15000,
 };
 
 const pool = new Pool(poolConfig);
