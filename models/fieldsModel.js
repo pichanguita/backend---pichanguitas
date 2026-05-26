@@ -344,6 +344,20 @@ const getAllFields = async (filters = {}) => {
       console.error(`Error obteniendo horarios para cancha ${field.id}:`, err.message);
       field.schedules = [];
     }
+
+    // Reglas y políticas (field_rules) — se exponen como array de textos para
+    // que la landing y el flujo de reserva del cliente puedan mostrarlas. La
+    // tabla solo almacena la columna `rule`; no hay categoría ni prioridad.
+    try {
+      const rulesResult = await pool.query(
+        'SELECT rule FROM field_rules WHERE field_id = $1 ORDER BY id ASC',
+        [field.id]
+      );
+      field.rules = rulesResult.rows.map(row => row.rule);
+    } catch (err) {
+      console.error(`Error obteniendo reglas para cancha ${field.id}:`, err.message);
+      field.rules = [];
+    }
   }
 
   return fields;
@@ -530,6 +544,19 @@ const getFieldById = async id => {
   } catch (err) {
     console.error(`Error obteniendo horarios para cancha ${id}:`, err.message);
     field.schedules = [];
+  }
+
+  // Reglas y políticas (field_rules) — array de textos para la vista pública
+  // (landing y reserva del cliente). La tabla solo almacena la columna `rule`.
+  try {
+    const rulesResult = await pool.query(
+      'SELECT rule FROM field_rules WHERE field_id = $1 ORDER BY id ASC',
+      [id]
+    );
+    field.rules = rulesResult.rows.map(row => row.rule);
+  } catch (err) {
+    console.error(`Error obteniendo reglas para cancha ${id}:`, err.message);
+    field.rules = [];
   }
 
   return field;
@@ -1166,9 +1193,8 @@ const getFieldConfig = async fieldId => {
     `;
     const amenitiesResult = await client.query(amenitiesQuery, [fieldId]);
 
-    // Obtener reglas
-    const rulesQuery =
-      "SELECT id, rule as rule_text, 'general' as category, 0 as priority FROM field_rules WHERE field_id = $1";
+    // Obtener reglas (la tabla solo almacena id, field_id y rule)
+    const rulesQuery = 'SELECT id, rule as rule_text FROM field_rules WHERE field_id = $1 ORDER BY id ASC';
     const rulesResult = await client.query(rulesQuery, [fieldId]);
 
     // Obtener mantenimiento.

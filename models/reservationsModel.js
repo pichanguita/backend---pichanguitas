@@ -57,6 +57,7 @@ const getAllReservations = async (filters = {}) => {
       f.admin_id AS field_admin_id,
       c.name AS customer_name,
       c.phone_number AS customer_phone,
+      c.user_id AS customer_user_id,
       -- Datos del reembolso (si existe)
       ref.id AS refund_id,
       ref.refund_amount,

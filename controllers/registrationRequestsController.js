@@ -56,6 +56,17 @@ const parseNumber = value => {
   return Number.isFinite(n) ? n : null;
 };
 
+// Normaliza la lista de deportes a un array de nombres.
+// En multipart (registro con archivos), un único deporte llega como string
+// (la clave se repite por elemento, y una sola repetición no es array). Sin
+// esta normalización, el caso de 1 solo deporte se perdía y la cancha quedaba
+// sin deportes en field_sports.
+const normalizeSportNames = raw => {
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  if (typeof raw === 'string' && raw.trim()) return [raw.trim()];
+  return [];
+};
+
 /**
  * Aplana el payload (body o JSON stringificado) al formato plano del modelo.
  * Acepta tanto envío legacy (`documents: { credentials, ... }`) como envío nuevo
@@ -93,11 +104,12 @@ const flattenRequestPayload = (body, extra = {}) => {
     credentials_password_enc:
       body.credentialsPassword || body.credentials_password_enc || credentials.password || null,
     user_id_registration: extra.user_id_registration ?? null,
-    _sportNames: Array.isArray(body.sportTypes)
-      ? body.sportTypes
-      : Array.isArray(docs.sportTypes)
-        ? docs.sportTypes
-        : [],
+    // Tolera 1 deporte (string en multipart) o varios (array). Mantiene la
+    // precedencia body > docs del envío legacy.
+    _sportNames: (() => {
+      const fromBody = normalizeSportNames(body.sportTypes);
+      return fromBody.length > 0 ? fromBody : normalizeSportNames(docs.sportTypes);
+    })(),
   };
 };
 

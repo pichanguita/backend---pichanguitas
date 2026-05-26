@@ -962,6 +962,10 @@ model sport_types {
   description            String?
   is_active              Boolean?                @default(true)
   status                 String?                 @default("active") @db.VarChar(20)
+  // Orden de visualización definido por el superadministrador. Es la fuente única
+  // de verdad para el orden de los deportes en los filtros de reserva (landing y
+  // panel de cliente). Ver migración 20260526000000_add_display_order_to_sport_types.
+  display_order          Int?
   user_id_registration   Int?
   date_time_registration DateTime?               @default(now()) @db.Timestamptz(6)
   user_id_modification   Int?

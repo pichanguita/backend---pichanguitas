@@ -5,6 +5,7 @@ const {
   getSportType,
   createNewSportType,
   updateExistingSportType,
+  reorderSportTypes,
   deleteSportTypeById,
   getSportTypeFieldsCount,
 } = require('../controllers/sportTypesController');
@@ -35,6 +36,11 @@ router.get('/:id', getSportType);
 
 // POST /api/sport-types - Crear un nuevo tipo de deporte
 router.post('/', verificarToken, verificarRolesPermitidos, createNewSportType);
+
+// PUT /api/sport-types/reorder - Reordenar los tipos de deportes (superadmin)
+// IMPORTANTE: debe declararse ANTES de PUT /:id para que la ruta literal no sea
+// capturada por la ruta paramétrica.
+router.put('/reorder', verificarToken, verificarRolesPermitidos, reorderSportTypes);
 
 // PUT /api/sport-types/:id - Actualizar un tipo de deporte
 router.put('/:id', verificarToken, verificarRolesPermitidos, updateExistingSportType);

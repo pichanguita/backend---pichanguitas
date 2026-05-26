@@ -181,6 +181,9 @@ const transformFieldToCamelCase = field => {
     // Amenities/Servicios — array de objetos {key, label, icon_name, color_class}
     // del catálogo amenities_catalog. El frontend renderiza directo sin mappers.
     amenities: field.amenities || [],
+    // Reglas y políticas — array de textos (field_rules.rule). El frontend las
+    // muestra en el detalle de la cancha (landing) y en la reserva del cliente.
+    rules: field.rules || [],
     // Dimensiones de la cancha (transformar snake_case a camelCase + limpiar sufijos legacy)
     dimensions: field.dimensions
       ? {
@@ -294,6 +297,8 @@ const transformReservationToCamelCase = reservation => {
     customerPhone: reservation.customer_phone,
     customer_phone: reservation.customer_phone, // ✅ Mantener snake_case
     phoneNumber: reservation.customer_phone || reservation.phone_number, // ✅ Alias
+    customerUserId: reservation.customer_user_id, // null = cliente público (sin cuenta de login)
+    customer_user_id: reservation.customer_user_id, // ✅ Mantener snake_case
     // ✅ Campos de auditoría de aprobación/rechazo
     approvedBy: reservation.approved_by,
     approvedAt: reservation.approved_at,

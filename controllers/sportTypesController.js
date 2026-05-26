@@ -4,6 +4,7 @@ const {
   createSportType,
   updateSportType,
   deleteSportType,
+  reorderSportTypes: reorderSportTypesModel,
   countFieldsBySportType,
   sportTypeNameExists,
 } = require('../models/sportTypesModel');
@@ -179,6 +180,51 @@ const updateExistingSportType = async (req, res) => {
 };
 
 /**
+ * Reordenar los tipos de deportes.
+ * Recibe { orderedIds: number[] } con los IDs en el nuevo orden deseado y
+ * persiste el display_order. El orden resultante se refleja en los filtros de
+ * reserva (landing y panel de cliente).
+ */
+const reorderSportTypes = async (req, res) => {
+  try {
+    const { orderedIds } = req.body;
+
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Se requiere un arreglo de IDs (orderedIds) para reordenar',
+      });
+    }
+
+    const ids = orderedIds.map(Number);
+    if (ids.some(id => !Number.isInteger(id) || id <= 0)) {
+      return res.status(400).json({
+        success: false,
+        error: 'orderedIds contiene valores inválidos',
+      });
+    }
+
+    const user_id = req.user?.id || 1;
+    await reorderSportTypesModel(ids, user_id);
+
+    // Devolver la lista activa ya ordenada (consistente con GET por defecto).
+    const sportTypes = await getAllSportTypes(true);
+
+    res.json({
+      success: true,
+      message: 'Orden de deportes actualizado exitosamente',
+      data: sportTypes,
+    });
+  } catch (error) {
+    console.error('Error al reordenar tipos de deportes:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error al reordenar tipos de deportes',
+    });
+  }
+};
+
+/**
  * Eliminar un tipo de deporte (soft delete)
  */
 const deleteSportTypeById = async (req, res) => {
@@ -253,6 +299,7 @@ module.exports = {
   getSportType,
   createNewSportType,
   updateExistingSportType,
+  reorderSportTypes,
   deleteSportTypeById,
   getSportTypeFieldsCount,
 };

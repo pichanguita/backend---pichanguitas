@@ -15,6 +15,7 @@ const getAllSportTypes = async (onlyActive = false) => {
       description,
       is_active,
       status,
+      display_order,
       user_id_registration,
       date_time_registration,
       user_id_modification,
@@ -26,7 +27,9 @@ const getAllSportTypes = async (onlyActive = false) => {
     query += ` WHERE is_active = true AND status = 'active'`;
   }
 
-  query += ` ORDER BY name ASC`;
+  // El orden lo define el superadministrador (display_order). Los deportes sin
+  // orden asignado se ubican al final, con el nombre como criterio de desempate.
+  query += ` ORDER BY display_order ASC NULLS LAST, name ASC`;
 
   const result = await pool.query(query);
   return result.rows;
@@ -47,6 +50,7 @@ const getSportTypeById = async id => {
       description,
       is_active,
       status,
+      display_order,
       user_id_registration,
       date_time_registration,
       user_id_modification,
@@ -75,6 +79,7 @@ const createSportType = async sportTypeData => {
     user_id_registration,
   } = sportTypeData;
 
+  // Los deportes nuevos se ubican al final del orden actual (MAX(display_order)+1).
   const query = `
     INSERT INTO sport_types (
       name,
@@ -83,9 +88,14 @@ const createSportType = async sportTypeData => {
       description,
       is_active,
       status,
+      display_order,
       user_id_registration,
       date_time_registration
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6,
+      (SELECT COALESCE(MAX(display_order), 0) + 1 FROM sport_types),
+      $7, CURRENT_TIMESTAMP
+    )
     RETURNING *
   `;
 
@@ -161,6 +171,41 @@ const deleteSportType = async (id, user_id_modification) => {
 };
 
 /**
+ * Reordenar los tipos de deportes.
+ * Asigna display_order según la posición de cada ID en el arreglo recibido
+ * (posición 0 -> display_order 1, etc.). Se ejecuta en una transacción para
+ * garantizar consistencia del orden completo.
+ * @param {Array<number>} orderedIds - IDs en el nuevo orden deseado
+ * @param {number} user_id_modification - ID del usuario que realiza la acción
+ * @returns {Promise<boolean>} True si se reordenó correctamente
+ */
+const reorderSportTypes = async (orderedIds, user_id_modification) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (let index = 0; index < orderedIds.length; index += 1) {
+      await client.query(
+        `UPDATE sport_types
+         SET display_order = $1,
+             user_id_modification = $2,
+             date_time_modification = CURRENT_TIMESTAMP
+         WHERE id = $3`,
+        [index + 1, user_id_modification, orderedIds[index]]
+      );
+    }
+
+    await client.query('COMMIT');
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+/**
  * Contar canchas únicas asociadas a un tipo de deporte.
  * Considera ambas fuentes de vínculo: fields.sport_type y field_sports.sport_id.
  * Excluye canchas lógicamente eliminadas (status='deleted').
@@ -207,6 +252,7 @@ module.exports = {
   createSportType,
   updateSportType,
   deleteSportType,
+  reorderSportTypes,
   countFieldsBySportType,
   sportTypeNameExists,
 };
