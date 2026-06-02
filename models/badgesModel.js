@@ -283,10 +283,14 @@ const deleteBadge = async (id, user_id_modification) => {
 };
 
 /**
- * Verificar si un nombre de insignia ya existe
+ * Verificar si un nombre de insignia ya existe.
+ * Solo cuentan las insignias NO eliminadas: una insignia soft-deleted
+ * (status = 'inactive', ver deleteBadge) libera su nombre, de modo que se
+ * puede volver a crear otra con el mismo nombre. Coherente con getAllBadges,
+ * que también excluye las 'inactive'.
  */
 const badgeNameExists = async (name, excludeId = null) => {
-  let query = `SELECT id FROM badges WHERE LOWER(name) = LOWER($1)`;
+  let query = `SELECT id FROM badges WHERE LOWER(name) = LOWER($1) AND status <> 'inactive'`;
   const params = [name];
   if (excludeId) {
     query += ` AND id != $2`;

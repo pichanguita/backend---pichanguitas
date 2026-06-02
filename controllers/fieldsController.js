@@ -304,15 +304,22 @@ const updateExistingField = async (req, res) => {
     const status = body.status;
     const field_type = body.field_type || body.fieldType;
     const sport_type = body.sport_type || body.sportType;
-    const sport_ids = body.sport_ids || body.sportTypes || body.sportIds || []; // Array de IDs de deportes
+    // Actualización parcial: si el body no incluye deportes ni amenities, se dejan
+    // como `undefined` para que el modelo CONSERVE los valores actuales en lugar de
+    // sobrescribirlos (p. ej. al guardar solo el número de WhatsApp de la cancha).
+    const hasSportIds =
+      body.sport_ids !== undefined || body.sportTypes !== undefined || body.sportIds !== undefined;
+    const sport_ids = hasSportIds
+      ? body.sport_ids || body.sportTypes || body.sportIds || []
+      : undefined;
     const capacity = body.capacity;
     const requires_advance_payment = body.requires_advance_payment ?? body.requiresAdvancePayment;
-    const advance_payment_amount = body.advance_payment_amount || body.advancePaymentAmount;
+    const advance_payment_amount = body.advance_payment_amount ?? body.advancePaymentAmount;
     const is_active = body.is_active ?? body.isActive;
     const is_multi_sport = body.is_multi_sport ?? body.isMultiSport;
     // Campos adicionales
     const dimensions = body.dimensions; // { length, width, area, surface_type }
-    const amenities = body.amenities || []; // Array de strings
+    const amenities = body.amenities !== undefined ? body.amenities : undefined; // Array de keys
     const equipment = body.equipment; // { has_jersey_rental, jersey_price, has_ball_rental, ... }
 
     // Verificar si la cancha existe
@@ -324,26 +331,31 @@ const updateExistingField = async (req, res) => {
       });
     }
 
-    // Una cancha debe tener al menos un deporte configurado.
-    if (!Array.isArray(sport_ids) || sport_ids.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Debes seleccionar al menos un deporte para la cancha',
-      });
-    }
+    // Validar deportes SOLO cuando la actualización los incluye. Una actualización
+    // parcial que no toca deportes (p. ej. el número de WhatsApp) deja sport_ids
+    // como undefined y conserva los deportes existentes de la cancha.
+    if (sport_ids !== undefined) {
+      // Una cancha debe tener al menos un deporte configurado.
+      if (!Array.isArray(sport_ids) || sport_ids.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Debes seleccionar al menos un deporte para la cancha',
+        });
+      }
 
-    // Todos los IDs deben corresponder a deportes activos del catálogo.
-    // Los deportes eliminados (soft-deleted) no pueden asociarse a una cancha.
-    const activeSportsCheck = await pool.query(
-      `SELECT id FROM sport_types
-       WHERE id = ANY($1::int[]) AND is_active = true AND status = 'active'`,
-      [sport_ids.map(Number)]
-    );
-    if (activeSportsCheck.rows.length !== sport_ids.length) {
-      return res.status(400).json({
-        success: false,
-        error: 'Uno o más deportes seleccionados ya no están disponibles',
-      });
+      // Todos los IDs deben corresponder a deportes activos del catálogo.
+      // Los deportes eliminados (soft-deleted) no pueden asociarse a una cancha.
+      const activeSportsCheck = await pool.query(
+        `SELECT id FROM sport_types
+         WHERE id = ANY($1::int[]) AND is_active = true AND status = 'active'`,
+        [sport_ids.map(Number)]
+      );
+      if (activeSportsCheck.rows.length !== sport_ids.length) {
+        return res.status(400).json({
+          success: false,
+          error: 'Uno o más deportes seleccionados ya no están disponibles',
+        });
+      }
     }
 
     const fieldData = {
@@ -357,20 +369,20 @@ const updateExistingField = async (req, res) => {
       phone,
       latitude,
       longitude,
-      price_per_hour: price_per_hour ?? 0,
+      price_per_hour, // undefined => el modelo (COALESCE) conserva el precio actual
       status,
       field_type,
       sport_type,
-      sport_ids: sport_ids || [], // Array de IDs de todos los deportes
+      sport_ids, // undefined => el modelo conserva los deportes actuales
       capacity,
       requires_advance_payment,
-      advance_payment_amount: advance_payment_amount || 0,
+      advance_payment_amount, // undefined => el modelo conserva el adelanto actual
       is_active,
       is_multi_sport,
       user_id_modification: req.user?.id || 1,
       // Campos adicionales para tablas relacionadas
       dimensions: dimensions || null,
-      amenities: amenities || [],
+      amenities, // undefined => el modelo conserva los amenities actuales
       equipment: equipment || null,
     };
 

@@ -39,20 +39,17 @@ const getCancellationPolicyByFieldId = async fieldId => {
  * Validar si una reserva puede ser cancelada según la política
  * @param {Object} reservation - Reserva a validar
  * @param {Object} policy - Política de cancelación
+ * @param {'customer'|'admin'} [cancelledBy='customer'] - Rol que ejecuta la cancelación.
+ *   La política de la cancha (permiso de cancelación, ventana de anticipación,
+ *   pago aprobado y fecha vencida) solo restringe al CLIENTE. El administrador /
+ *   superadministrador cancela sin esas restricciones; únicamente conserva las
+ *   reglas de integridad de estado (ya cancelada / completada / no-show).
  * @returns {Object} { canCancel, reason, refundPercentage, refundAmount }
  */
-const validateCancellation = (reservation, policy) => {
-  // Verificar si la cancha permite cancelaciones
-  if (!policy.allow_cancellation) {
-    return {
-      canCancel: false,
-      reason: 'Esta cancha no permite cancelaciones',
-      refundPercentage: 0,
-      refundAmount: 0,
-    };
-  }
+const validateCancellation = (reservation, policy, cancelledBy = 'customer') => {
+  const isAdmin = cancelledBy === 'admin';
 
-  // Verificar estado de la reserva
+  // ── Reglas de integridad de estado: aplican a TODOS los roles ──
   if (reservation.status === 'cancelled') {
     return {
       canCancel: false,
@@ -80,18 +77,7 @@ const validateCancellation = (reservation, policy) => {
     };
   }
 
-  // Verificar si el pago ya fue aprobado/completado
-  if (reservation.payment_status === 'fully_paid') {
-    return {
-      canCancel: false,
-      reason:
-        'El pago ya fue aprobado por el administrador. Contacta al administrador para solicitar cancelación.',
-      refundPercentage: 0,
-      refundAmount: 0,
-    };
-  }
-
-  // Calcular tiempo hasta el evento
+  // Calcular tiempo hasta el evento (se informa siempre en el resultado).
   const now = new Date();
 
   // Parsear la fecha correctamente en zona horaria local
@@ -112,25 +98,49 @@ const validateCancellation = (reservation, policy) => {
   const hoursUntilEvent = (reservationDate - now) / (1000 * 60 * 60);
   const hoursRequired = policy.hours_before_event || 24;
 
-  if (hoursUntilEvent < 0) {
-    return {
-      canCancel: false,
-      reason: 'No se puede cancelar una reserva cuya fecha ya pasó',
-      refundPercentage: 0,
-      refundAmount: 0,
-    };
+  // ── Reglas de política de la cancha: solo restringen al CLIENTE ──
+  if (!isAdmin) {
+    // Verificar si la cancha permite cancelaciones
+    if (!policy.allow_cancellation) {
+      return {
+        canCancel: false,
+        reason: 'Esta cancha no permite cancelaciones',
+        refundPercentage: 0,
+        refundAmount: 0,
+      };
+    }
+
+    // Verificar si el pago ya fue aprobado/completado
+    if (reservation.payment_status === 'fully_paid') {
+      return {
+        canCancel: false,
+        reason:
+          'El pago ya fue aprobado por el administrador. Contacta al administrador para solicitar cancelación.',
+        refundPercentage: 0,
+        refundAmount: 0,
+      };
+    }
+
+    if (hoursUntilEvent < 0) {
+      return {
+        canCancel: false,
+        reason: 'No se puede cancelar una reserva cuya fecha ya pasó',
+        refundPercentage: 0,
+        refundAmount: 0,
+      };
+    }
+
+    if (hoursUntilEvent < hoursRequired) {
+      return {
+        canCancel: false,
+        reason: `Debes cancelar con al menos ${hoursRequired} horas de anticipación. Faltan ${hoursUntilEvent.toFixed(1)} horas.`,
+        refundPercentage: 0,
+        refundAmount: 0,
+      };
+    }
   }
 
-  if (hoursUntilEvent < hoursRequired) {
-    return {
-      canCancel: false,
-      reason: `Debes cancelar con al menos ${hoursRequired} horas de anticipación. Faltan ${hoursUntilEvent.toFixed(1)} horas.`,
-      refundPercentage: 0,
-      refundAmount: 0,
-    };
-  }
-
-  // Calcular reembolso
+  // Calcular reembolso (aplica a todos los roles)
   const advancePayment = parseFloat(reservation.advance_payment) || 0;
   const refundPercentage = parseFloat(policy.refund_percentage) || 0;
   const refundAmount = (advancePayment * refundPercentage) / 100;

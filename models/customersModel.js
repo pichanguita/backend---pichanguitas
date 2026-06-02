@@ -1,4 +1,8 @@
 const pool = require('../config/db');
+const {
+  RESERVATION_STATUS,
+  NON_BILLABLE_RESERVATION_STATUSES,
+} = require('../utils/reservationStatuses');
 
 /**
  * Obtener todos los clientes con estadísticas
@@ -318,48 +322,74 @@ const phoneNumberExists = async (phoneNumber, excludeId = null) => {
  * @returns {Promise<Array>} Lista de clientes con estadísticas de reservas
  */
 const getCustomersByFieldAdmin = async adminId => {
+  // $1 = adminId
+  // $2 = estados no cobrables (cancelada / no-show): no cuentan como alquiler,
+  //      horas jugadas, gasto ni horas gratis consumidas. Fuente única: reservationStatuses.
+  // $3 = estado 'cancelada': criterio de pertenencia (una cancelación no crea relación
+  //      cliente-cancha, pero un no-show sí: el cliente reservó en la cancha del admin).
   const query = `
-    SELECT DISTINCT
-      c.id,
-      c.user_id,
-      c.phone_number,
-      c.name,
-      c.email,
-      c.created_by,
-      c.is_vip,
-      c.notes,
-      c.status,
-      c.date_time_registration,
-      -- Estadísticas calculadas de las reservas en las canchas del admin
-      COUNT(r.id) FILTER (WHERE f.admin_id = $1 AND r.status != 'cancelled') as total_reservations,
-      COALESCE(SUM(r.hours) FILTER (WHERE f.admin_id = $1 AND r.status != 'cancelled'), 0) as total_hours,
-      COALESCE(SUM(r.total_price) FILTER (WHERE f.admin_id = $1 AND r.status != 'cancelled'), 0) as total_spent,
-      MAX(r.date) FILTER (WHERE f.admin_id = $1 AND r.status != 'cancelled') as last_reservation,
-      -- Estadísticas de promociones del cliente
-      COALESCE(c.earned_free_hours, 0) as earned_free_hours,
-      COALESCE(c.used_free_hours, 0) as used_free_hours,
-      COALESCE(c.available_free_hours, 0) as available_free_hours
-    FROM customers c
-    LEFT JOIN reservations r ON c.id = r.customer_id
-    LEFT JOIN fields f ON r.field_id = f.id
-    WHERE c.status = 'active'
-      AND (
-        -- Clientes que han reservado en las canchas del admin
-        EXISTS (
-          SELECT 1 FROM reservations r2
-          INNER JOIN fields f2 ON r2.field_id = f2.id
-          WHERE r2.customer_id = c.id
-            AND f2.admin_id = $1
-            AND r2.status != 'cancelled'
+    SELECT
+      sub.*,
+      GREATEST(sub.earned_free_hours - sub.used_free_hours, 0) AS available_free_hours
+    FROM (
+      SELECT
+        c.id,
+        c.user_id,
+        c.phone_number,
+        c.name,
+        c.email,
+        c.created_by,
+        c.is_vip,
+        c.notes,
+        c.status,
+        c.date_time_registration,
+        -- Estadísticas de reservas EFECTIVAS en las canchas del admin
+        COUNT(r.id) FILTER (WHERE f.admin_id = $1 AND NOT (r.status = ANY($2))) AS total_reservations,
+        COALESCE(SUM(r.hours) FILTER (WHERE f.admin_id = $1 AND NOT (r.status = ANY($2))), 0) AS total_hours,
+        COALESCE(SUM(r.total_price) FILTER (WHERE f.admin_id = $1 AND NOT (r.status = ANY($2))), 0) AS total_spent,
+        MAX(r.date) FILTER (WHERE f.admin_id = $1 AND NOT (r.status = ANY($2))) AS last_reservation,
+        -- Horas gratis GANADAS por promociones creadas por este admin
+        COALESCE((
+          SELECT SUM(cpr.hours_earned)
+          FROM customer_promotion_redemptions cpr
+          INNER JOIN promotion_rules pr ON cpr.promotion_rule_id = pr.id
+          WHERE cpr.customer_id = c.id AND pr.created_by = $1
+        ), 0) AS earned_free_hours,
+        -- Horas gratis USADAS en reservas efectivas de las canchas de este admin
+        COALESCE((
+          SELECT SUM(r3.free_hours_used)
+          FROM reservations r3
+          INNER JOIN fields f3 ON r3.field_id = f3.id
+          WHERE r3.customer_id = c.id
+            AND f3.admin_id = $1
+            AND NOT (r3.status = ANY($2))
+        ), 0) AS used_free_hours
+      FROM customers c
+      LEFT JOIN reservations r ON c.id = r.customer_id
+      LEFT JOIN fields f ON r.field_id = f.id
+      WHERE c.status = 'active'
+        AND (
+          -- Clientes que han reservado en las canchas del admin
+          EXISTS (
+            SELECT 1 FROM reservations r2
+            INNER JOIN fields f2 ON r2.field_id = f2.id
+            WHERE r2.customer_id = c.id
+              AND f2.admin_id = $1
+              AND r2.status <> $3
+          )
+          -- O clientes creados directamente por el admin
+          OR c.created_by = $1
         )
-        -- O clientes creados directamente por el admin
-        OR c.created_by = $1
-      )
-    GROUP BY c.id
-    ORDER BY total_reservations DESC, c.name ASC
+      GROUP BY c.id
+    ) sub
+    ORDER BY sub.total_reservations DESC, sub.name ASC
   `;
 
-  const result = await pool.query(query, [adminId]);
+  const result = await pool.query(query, [
+    adminId,
+    NON_BILLABLE_RESERVATION_STATUSES,
+    RESERVATION_STATUS.CANCELLED,
+  ]);
   return result.rows;
 };
 
@@ -380,23 +410,23 @@ const getAllCustomersWithStats = async () => {
       c.notes,
       c.status,
       c.date_time_registration,
-      -- Estadísticas calculadas de todas las reservas
+      -- Estadísticas calculadas de las reservas EFECTIVAS (excluye cancelada / no-show)
       COUNT(r.id) as total_reservations,
       COALESCE(SUM(r.hours), 0) as total_hours,
       COALESCE(SUM(r.total_price), 0) as total_spent,
       MAX(r.date) as last_reservation,
-      -- Estadísticas de promociones del cliente
+      -- Estadísticas de promociones del cliente (saldo global; el super_admin ve todo el sistema)
       COALESCE(c.earned_free_hours, 0) as earned_free_hours,
       COALESCE(c.used_free_hours, 0) as used_free_hours,
       COALESCE(c.available_free_hours, 0) as available_free_hours
     FROM customers c
-    LEFT JOIN reservations r ON c.id = r.customer_id AND r.status != 'cancelled'
+    LEFT JOIN reservations r ON c.id = r.customer_id AND NOT (r.status = ANY($1))
     WHERE c.status = 'active'
     GROUP BY c.id
     ORDER BY total_reservations DESC, c.name ASC
   `;
 
-  const result = await pool.query(query);
+  const result = await pool.query(query, [NON_BILLABLE_RESERVATION_STATUSES]);
   return result.rows;
 };
 

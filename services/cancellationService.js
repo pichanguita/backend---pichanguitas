@@ -39,7 +39,7 @@ async function cancelReservationWithPolicy({
   }
 
   const policy = await getCancellationPolicyByFieldId(reservation.field_id);
-  const validation = validateCancellation(reservation, policy);
+  const validation = validateCancellation(reservation, policy, cancelledBy);
 
   if (!validation.canCancel) {
     const err = new Error(validation.reason);

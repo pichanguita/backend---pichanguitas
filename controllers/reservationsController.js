@@ -441,9 +441,15 @@ const createNewReservation = async (req, res) => {
       // Nota: remaining_payment se calcula con calculatedRemainingPayment en la lógica de adelanto
     }
 
-    // ✅ TODAS LAS RESERVAS SE CONFIRMAN AUTOMÁTICAMENTE
-    // El admin puede cancelar posteriormente si lo necesita
-    const reservationStatus = 'confirmed';
+    // El estado de la reserva depende de la configuración de la cancha:
+    // si la cancha "requiere confirmación manual del administrador"
+    // (requires_manual_confirmation), las reservas de CLIENTE nacen 'pending' y
+    // deben aprobarse/rechazarse en el módulo "Gestión de Reservas". Si no lo
+    // requiere, se autoconfirman. Las reservas creadas por un admin siempre nacen
+    // 'confirmed' (el admin no necesita auto-aprobarse). El status se DERIVA aquí
+    // en el backend para no confiar en el payload del cliente.
+    const reservationStatus =
+      !isAdminCreatingBooking && field.requires_manual_confirmation ? 'pending' : 'confirmed';
     let finalPaymentStatus = payment_status || 'pending';
 
     // Determinar payment_status según el contexto
@@ -471,12 +477,14 @@ const createNewReservation = async (req, res) => {
     } else if (payment_voucher_url && !isCashPayment) {
       // Cliente con voucher: pago pendiente de verificación
       finalPaymentStatus = 'pending';
-      console.log('✅ [RESERVA] Cliente con voucher - status: confirmed, payment_status: pending');
+      console.log(
+        `✅ [RESERVA] Cliente con voucher - status: ${reservationStatus}, payment_status: pending`
+      );
     } else {
       // Cliente sin voucher (efectivo): pago pendiente
       finalPaymentStatus = 'pending';
       console.log(
-        '✅ [RESERVA] Cliente (efectivo/sin voucher) - status: confirmed, payment_status: pending'
+        `✅ [RESERVA] Cliente (efectivo/sin voucher) - status: ${reservationStatus}, payment_status: pending`
       );
     }
 
@@ -643,6 +651,7 @@ const updateExistingReservation = async (req, res) => {
       payment_voucher_url,
       status,
       hours,
+      cancellation_reason,
       expected_status, // Para bloqueo optimista
     } = req.body;
 
@@ -739,6 +748,9 @@ const updateExistingReservation = async (req, res) => {
     if (status === 'rejected') {
       reservationData.rejected_by = userId;
       reservationData.rejected_at = new Date();
+      // Persistir el motivo del rechazo (lo recolecta el modal de "Gestión de
+      // Reservas" y se muestra luego en la pestaña "Rechazadas").
+      reservationData.cancellation_reason = cancellation_reason ?? null;
     }
 
     const updatedReservation = await updateReservation(id, reservationData);

@@ -76,7 +76,11 @@ model badge_tiers {
 
 model badges {
   id                     Int               @id @default(autoincrement())
-  name                   String            @unique @db.VarChar(255)
+  // La unicidad del nombre se aplica solo a insignias NO eliminadas mediante un
+  // índice ÚNICO PARCIAL (badges_name_key, WHERE status <> 'inactive') creado por
+  // migración SQL. No se usa @unique aquí porque Prisma no puede expresar índices
+  // parciales. Una insignia soft-deleted libera su nombre para reutilizarlo.
+  name                   String            @db.VarChar(255)
   icon                   String?           @db.VarChar(255)
   description            String?
   is_active              Boolean?          @default(true)

@@ -423,6 +423,7 @@ const updateReservation = async (id, reservationData) => {
     approved_at,
     rejected_by,
     rejected_at,
+    cancellation_reason,
     expected_status, // Para bloqueo optimista
   } = reservationData;
 
@@ -483,9 +484,10 @@ const updateReservation = async (id, reservationData) => {
           approved_at = COALESCE($15, approved_at),
           rejected_by = COALESCE($16, rejected_by),
           rejected_at = COALESCE($17, rejected_at),
-          user_id_modification = $18,
+          cancellation_reason = COALESCE($18, cancellation_reason),
+          user_id_modification = $19,
           date_time_modification = CURRENT_TIMESTAMP
-      WHERE id = $19
+      WHERE id = $20
       RETURNING *
     `;
 
@@ -507,6 +509,7 @@ const updateReservation = async (id, reservationData) => {
       approved_at,
       rejected_by,
       rejected_at,
+      cancellation_reason,
       user_id_modification,
       id,
     ]);
@@ -756,7 +759,7 @@ const checkAvailability = async (
     FROM reservations
     WHERE field_id = $1
       AND date = $2
-      AND status NOT IN ('cancelled', 'no_show')
+      AND status NOT IN ('cancelled', 'no_show', 'rejected')
       AND (
         (start_time < $4 AND end_time > $3)
       )

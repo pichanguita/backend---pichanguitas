@@ -826,7 +826,9 @@ const updateField = async (id, fieldData) => {
     status,
     field_type,
     sport_type,
-    sport_ids = [], // Array de IDs de todos los deportes
+    // Sin default: si el caller no envía deportes (actualización parcial), sport_ids
+    // queda undefined y el bloque de field_sports no se ejecuta (se conservan los actuales).
+    sport_ids,
     capacity,
     requires_advance_payment,
     advance_payment_amount,
@@ -835,7 +837,8 @@ const updateField = async (id, fieldData) => {
     user_id_modification,
     // Campos adicionales para tablas relacionadas
     dimensions = null,
-    amenities = [],
+    // Sin default: undefined => no se tocan los amenities (actualización parcial).
+    amenities,
     equipment = null,
   } = fieldData;
 
