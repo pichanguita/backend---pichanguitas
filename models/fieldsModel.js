@@ -1207,8 +1207,7 @@ const getFieldConfig = async fieldId => {
     // que se usa al crear nuevos items en el frontend ('scheduled').
     const maintenanceQuery = `
       SELECT id, start_date, end_date, reason,
-             COALESCE(maintenance_type, 'scheduled') as maintenance_type,
-             'scheduled' as status
+             COALESCE(maintenance_type, 'scheduled') as maintenance_type
       FROM field_maintenance_schedules
       WHERE field_id = $1
       ORDER BY start_date DESC
@@ -1409,7 +1408,13 @@ const updateFieldConfig = async (fieldId, configData, userId) => {
       // Insertar nuevos mantenimientos.
       // Persistir maintenance_type (Programado / Emergencia / Mejora) para que
       // el select del frontend conserve el valor elegido al recargar la config.
-      for (const maintenance of configData.maintenanceSchedules) {
+      // Defensa en profundidad: start_date y end_date son NOT NULL en la BD, así
+      // que se ignoran filas sin ambas fechas. Sin esto, una fila incompleta
+      // abortaría toda la transacción y haría ROLLBACK de la configuración entera.
+      const validMaintenances = configData.maintenanceSchedules.filter(
+        (maintenance) => maintenance.start_date && maintenance.end_date
+      );
+      for (const maintenance of validMaintenances) {
         await client.query(
           `INSERT INTO field_maintenance_schedules (field_id, start_date, end_date, reason, maintenance_type, user_id_registration)
            VALUES ($1, $2, $3, $4, $5, $6)`,
