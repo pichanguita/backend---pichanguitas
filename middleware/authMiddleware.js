@@ -1,10 +1,13 @@
 const jwt = require('jsonwebtoken');
+const { AUTH_ERROR_CODES } = require('../constants/authErrorCodes');
 
 function verificarToken(req, res, next) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Token no proporcionado' });
+    return res
+      .status(401)
+      .json({ error: 'Token no proporcionado', code: AUTH_ERROR_CODES.TOKEN_MISSING });
   }
 
   const token = authHeader.split(' ')[1];
@@ -13,8 +16,14 @@ function verificarToken(req, res, next) {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     req.user = payload; // Puedes acceder desde los controladores
     next();
-  } catch (_err) {
-    return res.status(403).json({ error: 'Token inválido o expirado' });
+  } catch (err) {
+    // Distinguir expiración (sesión vencida) de token corrupto/manipulado.
+    // El status se mantiene en 403 por compatibilidad; la señal estable es `code`.
+    const code =
+      err.name === 'TokenExpiredError'
+        ? AUTH_ERROR_CODES.TOKEN_EXPIRED
+        : AUTH_ERROR_CODES.TOKEN_INVALID;
+    return res.status(403).json({ error: 'Token inválido o expirado', code });
   }
 }
 

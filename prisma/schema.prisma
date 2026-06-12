@@ -484,8 +484,6 @@ model fields {
   requires_manual_confirmation    Boolean                       @default(false)
   is_active                       Boolean?                      @default(true)
   is_multi_sport                  Boolean?                      @default(false)
-  rating                          Decimal?                      @default(0.00) @db.Decimal(3, 2)
-  total_reviews                   Int?                          @default(0)
   approved_by                     Int?
   approved_at                     DateTime?                     @db.Timestamptz(6)
   rejected_by                     Int?

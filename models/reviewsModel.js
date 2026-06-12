@@ -55,11 +55,17 @@ const getAllReviews = async (filters = {}) => {
     paramCount++;
   }
 
-  // Filtro por estado
+  // Filtro por estado.
+  // Si se pide un status explícito se honra. Si no, se excluyen las reseñas
+  // con soft delete (status = 'inactive'): son tumbas lógicas que ningún
+  // listado debe resucitar. Sin esto, una reseña "eliminada" reaparecía al
+  // refrescar porque el panel admin no envía filtro de status.
   if (filters.status) {
     query += ` AND r.status = $${paramCount}`;
     params.push(filters.status);
     paramCount++;
+  } else {
+    query += ` AND r.status <> 'inactive'`;
   }
 
   query += ` ORDER BY r.date_time_registration DESC`;
@@ -327,6 +333,83 @@ const reservationHasReview = async reservationId => {
   return result.rows.length > 0;
 };
 
+// Campos seguros para exponer en endpoints públicos (sin login). Nunca incluir
+// PII de contacto (teléfono, email, customer_id): la landing solo necesita el
+// nombre visible, las notas y el comentario.
+const PUBLIC_REVIEW_FIELDS = `
+  r.id,
+  r.field_id,
+  r.customer_name,
+  r.cleanliness,
+  r.service,
+  r.facilities,
+  r.overall_rating,
+  r.comment,
+  r.date_time_registration
+`;
+
+/**
+ * Reseñas públicas de una cancha (landing y flujo de reserva).
+ * Solo visibles y activas, ordenadas de la más reciente a la más antigua.
+ * @param {number} fieldId - ID de la cancha
+ * @param {number} limit - Máximo de reseñas a devolver
+ * @param {number} offset - Desplazamiento para paginación incremental
+ * @returns {Promise<Array>} Reseñas públicas
+ */
+const getPublicFieldReviews = async (fieldId, limit, offset) => {
+  const query = `
+    SELECT ${PUBLIC_REVIEW_FIELDS}
+    FROM reviews r
+    WHERE r.field_id = $1
+      AND r.is_visible = true
+      AND r.status = 'active'
+    ORDER BY r.date_time_registration DESC
+    LIMIT $2 OFFSET $3
+  `;
+  const result = await pool.query(query, [fieldId, limit, offset]);
+  return result.rows;
+};
+
+/**
+ * Conteo de reseñas públicas (visibles y activas) de una cancha.
+ * Misma fuente de verdad que el promedio derivado en fields.
+ * @param {number} fieldId - ID de la cancha
+ * @returns {Promise<number>} Total de reseñas visibles
+ */
+const getPublicFieldReviewsCount = async fieldId => {
+  const query = `
+    SELECT COUNT(*)::int AS total
+    FROM reviews
+    WHERE field_id = $1 AND is_visible = true AND status = 'active'
+  `;
+  const result = await pool.query(query, [fieldId]);
+  return result.rows[0].total;
+};
+
+/**
+ * Reseñas destacadas globales para la sección de la landing.
+ * Solo visibles, activas y con comentario, de canchas no eliminadas,
+ * priorizando mejor calificación y más recientes.
+ * @param {number} limit - Máximo de reseñas a devolver
+ * @returns {Promise<Array>} Reseñas destacadas con el nombre de su cancha
+ */
+const getFeaturedReviews = async limit => {
+  const query = `
+    SELECT ${PUBLIC_REVIEW_FIELDS}, f.name AS field_name
+    FROM reviews r
+    INNER JOIN fields f ON r.field_id = f.id
+    WHERE r.is_visible = true
+      AND r.status = 'active'
+      AND r.comment IS NOT NULL
+      AND TRIM(r.comment) <> ''
+      AND f.status <> 'deleted'
+    ORDER BY r.overall_rating DESC, r.date_time_registration DESC
+    LIMIT $1
+  `;
+  const result = await pool.query(query, [limit]);
+  return result.rows;
+};
+
 module.exports = {
   getAllReviews,
   getReviewById,
@@ -337,4 +420,7 @@ module.exports = {
   deleteReview,
   getFieldReviewStats,
   reservationHasReview,
+  getPublicFieldReviews,
+  getPublicFieldReviewsCount,
+  getFeaturedReviews,
 };

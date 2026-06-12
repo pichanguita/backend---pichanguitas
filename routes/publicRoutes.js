@@ -16,6 +16,10 @@ const {
   getCancellationInfo,
 } = require('../controllers/publicCancellationController');
 const { getFieldAvailability } = require('../controllers/publicAvailabilityController');
+const {
+  getFieldReviewsPublic,
+  getFeaturedReviewsPublic,
+} = require('../controllers/publicReviewsController');
 
 // ==================== DISPONIBILIDAD DE CANCHAS ====================
 
@@ -41,6 +45,22 @@ const { getFieldAvailability } = require('../controllers/publicAvailabilityContr
  * }
  */
 router.get('/fields/:fieldId/availability', getFieldAvailability);
+
+// ==================== RESEÑAS PÚBLICAS ====================
+
+/**
+ * GET /api/public/reviews/featured
+ * Reseñas destacadas globales para la sección de la landing.
+ * Query params opcionales: limit (default 6, máx 20)
+ */
+router.get('/reviews/featured', getFeaturedReviewsPublic);
+
+/**
+ * GET /api/public/fields/:fieldId/reviews
+ * Reseñas visibles de una cancha (las más recientes primero).
+ * Query params opcionales: limit (default 5, máx 50), offset (default 0)
+ */
+router.get('/fields/:fieldId/reviews', getFieldReviewsPublic);
 
 // ==================== CANCELACIÓN DE RESERVAS ====================
 

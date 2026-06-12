@@ -64,8 +64,20 @@ const getAllFields = async (filters = {}) => {
       f.requires_manual_confirmation,
       f.is_active,
       f.is_multi_sport,
-      f.rating,
-      f.total_reviews,
+      -- Rating y total de reseñas derivados SIEMPRE de la tabla reviews
+      -- (fuente única). Se cuentan solo las reseñas visibles y activas, por lo
+      -- que ocultar/eliminar una reseña la excluye del promedio automáticamente
+      -- sin necesidad de recalcular ni persistir nada en la cancha.
+      COALESCE((
+        SELECT ROUND(AVG(rv.overall_rating), 2)
+        FROM reviews rv
+        WHERE rv.field_id = f.id AND rv.is_visible = true AND rv.status = 'active'
+      ), 0) AS rating,
+      (
+        SELECT COUNT(*)
+        FROM reviews rv
+        WHERE rv.field_id = f.id AND rv.is_visible = true AND rv.status = 'active'
+      ) AS total_reviews,
       f.approved_by,
       f.approved_at,
       f.rejected_by,
@@ -1145,27 +1157,6 @@ const deleteField = async (id, user_id_modification) => {
 };
 
 /**
- * Actualizar rating de una cancha
- * @param {number} id - ID de la cancha
- * @param {number} rating - Nuevo rating
- * @param {number} totalReviews - Total de reseñas
- * @returns {Promise<Object|null>} Cancha actualizada o null
- */
-const updateFieldRating = async (id, rating, totalReviews) => {
-  const query = `
-    UPDATE fields
-    SET rating = $1,
-        total_reviews = $2,
-        date_time_modification = CURRENT_TIMESTAMP
-    WHERE id = $3
-    RETURNING *
-  `;
-
-  const result = await pool.query(query, [rating, totalReviews, id]);
-  return result.rows.length > 0 ? result.rows[0] : null;
-};
-
-/**
  * Obtener configuración completa de una cancha
  * Incluye información de todas las tablas relacionadas
  * @param {number} fieldId - ID de la cancha
@@ -1605,7 +1596,6 @@ module.exports = {
   approveField,
   rejectField,
   deleteField,
-  updateFieldRating,
   getFieldConfig,
   updateFieldConfig,
   getFieldSchedulesRows,
