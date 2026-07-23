@@ -199,13 +199,14 @@ const registerCustomer = async (req, res) => {
         role_id,
         name,
         phone,
+        dni,
         is_active,
         status,
         login_attempts,
         is_blocked,
         date_time_registration
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
-      RETURNING id, username, email, name, phone, role_id, is_active, status, date_time_registration`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      RETURNING id, username, email, name, phone, dni, role_id, is_active, status, date_time_registration`,
       [
         username, // username generado automáticamente (ej: juanperez)
         emailValue, // email
@@ -213,6 +214,7 @@ const registerCustomer = async (req, res) => {
         3, // role_id = 3 (customer)
         fullName, // nombre completo
         phone, // phone
+        dni, // dni (8 dígitos, validado arriba)
         true, // is_active
         'active', // status
         0, // login_attempts

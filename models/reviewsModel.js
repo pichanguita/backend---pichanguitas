@@ -315,7 +315,7 @@ const getFieldReviewStats = async fieldId => {
     FROM reviews
     WHERE field_id = $1
       AND is_visible = true
-      AND status = 'active'
+      AND status <> 'inactive'
   `;
 
   const result = await pool.query(query, [fieldId]);
@@ -350,7 +350,13 @@ const PUBLIC_REVIEW_FIELDS = `
 
 /**
  * Reseñas públicas de una cancha (landing y flujo de reserva).
- * Solo visibles y activas, ordenadas de la más reciente a la más antigua.
+ *
+ * La visibilidad la decide SOLO `is_visible` (fuente única): si el admin la dejó
+ * visible, aparece. Se excluyen únicamente las reseñas con soft-delete
+ * (`status = 'inactive'`), igual que el listado del panel admin. No se exige
+ * `status = 'active'` exacto: ese acoplamiento escondía de la landing cualquier
+ * reseña visible cuyo status difiriera de esa cadena, aunque el admin sí la veía.
+ *
  * @param {number} fieldId - ID de la cancha
  * @param {number} limit - Máximo de reseñas a devolver
  * @param {number} offset - Desplazamiento para paginación incremental
@@ -362,7 +368,7 @@ const getPublicFieldReviews = async (fieldId, limit, offset) => {
     FROM reviews r
     WHERE r.field_id = $1
       AND r.is_visible = true
-      AND r.status = 'active'
+      AND r.status <> 'inactive'
     ORDER BY r.date_time_registration DESC
     LIMIT $2 OFFSET $3
   `;
@@ -380,7 +386,7 @@ const getPublicFieldReviewsCount = async fieldId => {
   const query = `
     SELECT COUNT(*)::int AS total
     FROM reviews
-    WHERE field_id = $1 AND is_visible = true AND status = 'active'
+    WHERE field_id = $1 AND is_visible = true AND status <> 'inactive'
   `;
   const result = await pool.query(query, [fieldId]);
   return result.rows[0].total;
@@ -399,7 +405,7 @@ const getFeaturedReviews = async limit => {
     FROM reviews r
     INNER JOIN fields f ON r.field_id = f.id
     WHERE r.is_visible = true
-      AND r.status = 'active'
+      AND r.status <> 'inactive'
       AND r.comment IS NOT NULL
       AND TRIM(r.comment) <> ''
       AND f.status <> 'deleted'

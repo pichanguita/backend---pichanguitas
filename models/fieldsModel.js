@@ -65,18 +65,19 @@ const getAllFields = async (filters = {}) => {
       f.is_active,
       f.is_multi_sport,
       -- Rating y total de reseñas derivados SIEMPRE de la tabla reviews
-      -- (fuente única). Se cuentan solo las reseñas visibles y activas, por lo
-      -- que ocultar/eliminar una reseña la excluye del promedio automáticamente
-      -- sin necesidad de recalcular ni persistir nada en la cancha.
+      -- (fuente única). La visibilidad la decide is_visible; solo se excluye el
+      -- soft-delete (status='inactive'). Así ocultar/eliminar una reseña la saca
+      -- del promedio automáticamente, y mostrar una reseña visible la incluye sin
+      -- depender de que su status sea exactamente 'active'.
       COALESCE((
         SELECT ROUND(AVG(rv.overall_rating), 2)
         FROM reviews rv
-        WHERE rv.field_id = f.id AND rv.is_visible = true AND rv.status = 'active'
+        WHERE rv.field_id = f.id AND rv.is_visible = true AND rv.status <> 'inactive'
       ), 0) AS rating,
       (
         SELECT COUNT(*)
         FROM reviews rv
-        WHERE rv.field_id = f.id AND rv.is_visible = true AND rv.status = 'active'
+        WHERE rv.field_id = f.id AND rv.is_visible = true AND rv.status <> 'inactive'
       ) AS total_reviews,
       f.approved_by,
       f.approved_at,

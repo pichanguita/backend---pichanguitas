@@ -336,6 +336,7 @@ const transformUserToCamelCase = user => {
     adminType: user.admin_type,
     name: user.name,
     phone: user.phone,
+    dni: user.dni,
     avatarUrl: user.avatar_url,
     isActive: user.is_active,
     lastLogin: user.last_login,

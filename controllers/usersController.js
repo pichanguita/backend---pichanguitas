@@ -314,12 +314,30 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // Si el usuario está cambiando su propia contraseña, verificar la actual
     const requestingUserId = req.user?.id;
     const isOwnPassword = parseInt(id) === requestingUserId;
+    const isAdmin = [1, 2].includes(req.user?.id_rol);
 
+    // Un usuario no-admin (p. ej. un cliente) solo puede cambiar su propia contraseña y
+    // está obligado a probar la contraseña actual. Los admins conservan la capacidad de
+    // restablecer contraseñas ajenas sin la actual.
+    if (!isAdmin) {
+      if (!isOwnPassword) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acceso denegado: no autorizado',
+        });
+      }
+      if (!current_password) {
+        return res.status(400).json({
+          success: false,
+          error: 'La contraseña actual es obligatoria',
+        });
+      }
+    }
+
+    // Verificar la contraseña actual cuando el usuario cambia la suya y la envía
     if (isOwnPassword && current_password) {
-      // Verificar contraseña actual
       const isValidPassword = await bcrypt.compare(current_password, existingUser.password_hash);
       if (!isValidPassword) {
         return res.status(400).json({

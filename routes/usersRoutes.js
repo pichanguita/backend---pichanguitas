@@ -25,6 +25,20 @@ const verificarRolesPermitidos = (req, res, next) => {
   next();
 };
 
+// Middleware que autoriza a los admins (rol 1 y 2) o al propio usuario dueño del recurso.
+// Permite que cualquier usuario autenticado (incluidos los clientes, rol 3) opere sobre su
+// propia cuenta, sin abrir el recurso a terceros. La regla de negocio adicional (exigir la
+// contraseña actual a los no-admins) vive en el controlador, no aquí.
+const verificarAdminOPropietario = (req, res, next) => {
+  const rol = req.user?.id_rol;
+  const esAdmin = [1, 2].includes(rol);
+  const esPropietario = Number.parseInt(req.params.id, 10) === req.user?.id;
+  if (esAdmin || esPropietario) {
+    return next();
+  }
+  return res.status(403).json({ success: false, error: 'Acceso denegado: no autorizado' });
+};
+
 // Middleware para validar solo SuperAdmin
 const verificarSuperAdmin = (req, res, next) => {
   const rol = req.user?.id_rol;
@@ -58,8 +72,9 @@ router.post('/', verificarToken, verificarRolesPermitidos, createNewUser);
 // PUT /api/users/:id - Actualizar un usuario
 router.put('/:id', verificarToken, verificarRolesPermitidos, updateExistingUser);
 
-// PUT /api/users/:id/password - Cambiar contraseña de un usuario
-router.put('/:id/password', verificarToken, verificarRolesPermitidos, changePassword);
+// PUT /api/users/:id/password - Cambiar contraseña (admins sobre cualquier usuario; cada
+// usuario sobre su propia cuenta, incluidos los clientes)
+router.put('/:id/password', verificarToken, verificarAdminOPropietario, changePassword);
 
 // POST /api/users/:id/assign-fields - Asignar canchas a un usuario
 router.post('/:id/assign-fields', verificarToken, verificarRolesPermitidos, assignFields);

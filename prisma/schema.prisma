@@ -1031,6 +1031,7 @@ model users {
   admin_type                                                 String?                 @db.VarChar(20)
   name                                                       String                  @db.VarChar(255)
   phone                                                      String?                 @db.VarChar(20)
+  dni                                                        String?                 @db.VarChar(8)
   avatar_url                                                 String?
   is_active                                                  Boolean?                @default(true)
   last_login                                                 DateTime?               @db.Timestamptz(6)

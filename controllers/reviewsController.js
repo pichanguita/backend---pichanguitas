@@ -85,8 +85,6 @@ const createNewReview = async (req, res) => {
       service,
       facilities,
       comment,
-      is_visible,
-      status,
     } = req.body;
 
     // Validaciones básicas
@@ -131,6 +129,11 @@ const createNewReview = async (req, res) => {
     // Calcular calificación general
     const overall_rating = ((cleanliness + service + facilities) / 3).toFixed(2);
 
+    // Una reseña nace SIEMPRE activa y visible: la moderación posterior es el
+    // botón "Ocultar" (is_visible), nunca el cliente. Forzamos estos valores en
+    // el servidor en vez de confiar en el body, para que ninguna reseña entre
+    // con un status raro que la escondería de la landing (ver la regla de
+    // visibilidad: is_visible manda y solo se excluye status='inactive').
     const reviewData = {
       reservation_id,
       field_id,
@@ -141,8 +144,8 @@ const createNewReview = async (req, res) => {
       facilities,
       overall_rating: parseFloat(overall_rating),
       comment: comment?.trim(),
-      is_visible,
-      status,
+      is_visible: true,
+      status: 'active',
       user_id_registration: req.user?.id || customer_id,
     };
 
@@ -269,6 +272,15 @@ const toggleVisibility = async (req, res) => {
 
     const user_id = req.user?.id || 1;
     const updatedReview = await toggleReviewVisibility(id, is_visible, user_id);
+
+    // Si el UPDATE no devolvió fila, el cambio NO se persistió: no reportar éxito
+    // (de lo contrario el frontend mostraría el cambio y "se revertiría" al refrescar).
+    if (!updatedReview) {
+      return res.status(500).json({
+        success: false,
+        error: 'No se pudo actualizar la visibilidad de la reseña',
+      });
+    }
 
     res.json({
       success: true,
